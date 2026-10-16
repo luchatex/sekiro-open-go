@@ -49,7 +49,9 @@ coverage.txt
 .workbuddy/
 .ai-memory/
 docs/
-.github/
+# GitHub Actions：仅 workflows 入库（release 自动构建 + CI）
+.github/*
+!.github/workflows/
 
 *.apk
 build/

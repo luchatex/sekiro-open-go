@@ -1,0 +1,45 @@
+name: Go CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# 并发路径（connListener 连接分发、group actor 串行化、Record 响应时序）
+# 必须跑 -race 才能覆盖；Windows 开发环境无 cgo（无 gcc）跑不了，
+# 故放在 Linux runner 上执行。
+env:
+  CGO_ENABLED: "1"
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache: true
+          cache-dependency-path: go/go.sum
+
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "以下文件需要 gofmt:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      - name: build
+        run: go build ./...
+
+      - name: test -race
+        run: go test -race -count=1 ./...

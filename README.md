@@ -10,7 +10,7 @@ SEKIRO 是一个多语言、分布式、网络拓扑无关的**服务发布平�
 
 它与传统 RPC（Dubbo / Spring Cloud / gRPC）的定位不同，主打**把受限环境中的能力暴露出来**：
 
-- **App / 终端程序**：具备 C 端能力，希望 B 端业务调用——通过 Sekiro 把参数转发到 App 内执行（即爬虫行业所说的 **RPC 爬虫**）
+- **App / 终端程序**：具备 C 端能力，希望 B 端业务调用——通过 Sekiro 把参数转发到 App 内执行
 - **受限网络**：数据只允许组织内网访问，可在内网运行 Sekiro 客户端对外发布 API
 - **加密算法**：算法运行在客户端程序中尚未完成逆向，可注入代码发布为 API
 - **服务能力保护**：能力提供方不交付代码、不暴露机器信息，调用方仅通过 Sekiro 使用
@@ -20,9 +20,10 @@ SEKIRO 是一个多语言、分布式、网络拓扑无关的**服务发布平�
 [多语言示例](https://github.com/yint-tech/sekiro-samples)
 
 > 致谢 [yint-tech](https://github.com/yint-tech) 的原版实现——本项目在协议设计、
-> 错误语义与工程决策上大量借鉴了原版（含其源码注释中记载的历史 BugFix）。
+> 本项目完全基于原版进行go语言复现，并根据大文本优化。
 
 ## 为什么重写
+
 
 原版基于 JVM（Netty + fastjson），对本项目的使用场景（爬虫回传大文本、js-web 浏览器 provider）存在几个痛点：
 
@@ -158,10 +159,21 @@ make race    # 竞态检测（Linux/WSL）
 - `/business` API 与 `/op` 均无鉴权，公网部署务必前置网关做访问控制
 - 黄金向量生成器（依赖原 Java 私有 jar）未随仓库发布，向量结果已固化在 `go/testdata/golden/`
 
+## 版本发布
+
+推送 `v*` 标签即自动发布（GitHub Actions 全平台构建 → 全量测试 → 冒烟自检 →
+创建 Release 并上传产物与 SHA256SUMS.txt）：
+
+```bash
+git tag v1.0.1 && git push origin v1.0.1
+```
+
+历史版本见 [Releases](https://github.com/luchatex/sekiro-open-go/releases)。
+
 ## License
 
-[Apache-2.0](LICENSE)（待确认，见下方说明）
+本项目以 [Apache-2.0](LICENSE) 发布（Copyright © 2026 luchatex）。
 
-本项目为独立实现的 Go 重写版，未包含原项目代码。原项目
+本项目为独立实现的 Go 重写版，未包含原项目代码；原项目
 [yint-tech/sekiro-open](https://github.com/yint-tech/sekiro-open) 仓库未附带 LICENSE 文件，
-其协议以原作者声明为准；本仓库的许可选择请在发布前确认。
+其权利归属以原作者声明为准。
