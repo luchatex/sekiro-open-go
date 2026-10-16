@@ -121,7 +121,7 @@ sekiro-open-go/
 ├── client/                  # JS 客户端 SDK（sekiroWeb-enhanced.js，进生产）
 ├── tests/                   # 真实客户端联调（官方 Java SDK demo / Python / JS 回归脚本）
 ├── deploy/                  # 反代配置（nginx / Caddy）、CentOS 部署与日志管理指南
-├── release/                 # 预编译产物清单与校验（二进制不入库）
+├── release/                 # 版本发布说明（产物由 Actions 自动构建发布）
 ├── docker-compose.yml
 └── README.md
 ```
@@ -150,7 +150,7 @@ make race    # 竞态检测（Linux/WSL）
 
 - **CentOS**：[deploy/deploy-centos.md](deploy/deploy-centos.md)（含 systemd + journald 日志管理、断开重连排查速查表）
 - **TLS/WSS**：[deploy/README.md](deploy/README.md)（nginx / Caddy 反代配置、Cloudflare Tunnel 零证书方案）
-- **预编译产物**：见 [release/README.md](release/README.md)（linux amd64/arm64、windows、darwin）
+- **预编译产物**：[Releases 页面](https://github.com/luchatex/sekiro-open-go/releases)下载（CI 自动构建），流程说明见 [release/README.md](release/README.md)
 
 ## 已知限制
 
