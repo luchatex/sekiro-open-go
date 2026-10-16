@@ -50,6 +50,10 @@ http://127.0.0.1:5612/op
 镜像采用多阶段构建（golang:1.27-alpine 编译 → alpine:3.20 运行，约 15MB），非 root 用户运行，内置健康检查（`/business/groupList`）。
 
 ```bash
+# 方式零：拉取 GHCR 预构建镜像（每个 v* tag 由 CI 自动发布，amd64/arm64）
+docker run -d --name sekiro -p 5612:5612 --restart unless-stopped \
+  ghcr.io/luchatex/sekiro-open-go:latest
+
 # 方式一：docker compose（推荐，编排文件在仓库根目录）
 docker compose up -d --build
 docker compose ps          # 等待 healthcheck 变 healthy

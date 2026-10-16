@@ -76,7 +76,11 @@ cd sekiro-open-go/go
 make build                      # 产出 bin/sekiro
 ./bin/sekiro -port 5612         # 默认端口与原版一致
 
-# 方式二：Docker
+# 方式二：Docker（拉取预构建镜像，多架构 amd64/arm64，随版本发布更新）
+docker run -d --name sekiro -p 5612:5612 --restart unless-stopped \
+  ghcr.io/luchatex/sekiro-open-go:latest
+
+# 方式三：本地构建镜像
 docker compose up -d --build    # 编排在仓库根目录，多阶段构建，alpine 约 15MB
 curl "http://127.0.0.1:5612/business/groupList"
 ```
