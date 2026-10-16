@@ -1,0 +1,59 @@
+*.iml
+.gradle
+/local.properties
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+
+# kdiff3 ignore
+*.orig
+
+# maven ignore
+target/
+
+# eclipse ignore
+.settings/
+.project
+.classpath
+
+# idea ignore
+.idea/
+*.ipr
+*.iws
+
+# temp ignore
+*.log
+*.cache
+*.diff
+*.patch
+*.tmp
+
+# system ignore
+Thumbs.db
+
+# go ignore（根锚定，避免误伤 cmd/sekiro/ 等源码目录）
+/sekiro.exe
+/sekiro
+bin/
+*.test
+*.out
+coverage.txt
+
+# release 产物：二进制不入库，说明与校验文件除外
+/release/*
+!/release/README.md
+!/release/SHA256SUMS.txt
+
+# workbuddy / 本地辅助目录（不入库）
+.workbuddy/
+.ai-memory/
+docs/
+.github/
+
+*.apk
+build/
+logs/
+
+# docker 本地环境变量
+.env

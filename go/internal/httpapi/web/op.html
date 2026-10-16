@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SEKIRO OP · 监控报表</title>
+<style>
+:root {
+  --bg: #f4f6f9; --card: #ffffff; --border: #e5e9f0;
+  --text: #1c2333; --muted: #6b7486; --accent: #3b6fe0;
+  --ok: #0f9d6e; --bad: #e04848; --warn: #e6912e;
+  --ok-bg: #e6f6ef; --bad-bg: #fdeaea; --warn-bg: #fdf3e4;
+  --shadow: 0 1px 3px rgba(16,32,64,.06), 0 4px 14px rgba(16,32,64,.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #10141d; --card: #171d29; --border: #263042;
+    --text: #dfe5f0; --muted: #8b95a8; --accent: #6d9bff;
+    --ok: #2fc08e; --bad: #f07171; --warn: #f0a54e;
+    --ok-bg: #12301f; --bad-bg: #37191c; --warn-bg: #33260f;
+    --shadow: 0 1px 3px rgba(0,0,0,.35);
+  }
+}
+* { box-sizing: border-box; margin: 0; }
+body {
+  font: 14px/1.6 "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  background: var(--bg); color: var(--text); padding: 0 0 48px;
+}
+header {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px;
+  padding: 18px 32px; background: var(--card); border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 10; box-shadow: var(--shadow);
+}
+header h1 { font-size: 18px; font-weight: 600; letter-spacing: .5px; }
+header h1 .dot { display:inline-block; width:10px; height:10px; border-radius:50%;
+  background: var(--ok); margin-right:8px; box-shadow: 0 0 0 3px var(--ok-bg); }
+header .meta { color: var(--muted); font-size: 12.5px; }
+header .spacer { flex: 1; }
+select, button {
+  font: inherit; color: var(--text); background: var(--card);
+  border: 1px solid var(--border); border-radius: 8px; padding: 5px 10px; cursor: pointer;
+}
+select:hover, button:hover { border-color: var(--accent); }
+main { max-width: 1240px; margin: 0 auto; padding: 24px 24px 0; }
+
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; }
+.kpi {
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px 18px; box-shadow: var(--shadow);
+}
+.kpi .label { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+.kpi .value { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.kpi .value small { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 2px; }
+
+.card {
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow); margin-top: 20px; overflow: hidden;
+}
+.card .head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 18px; border-bottom: 1px solid var(--border);
+}
+.card .head h2 { font-size: 15px; font-weight: 600; }
+.card .head .spacer { flex: 1; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { border: none; border-radius: 0; padding: 5px 14px; font-size: 12.5px; }
+.seg button.active { background: var(--accent); color: #fff; }
+.legend { display: flex; gap: 14px; padding: 8px 18px 2px; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
+.legend i { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+
+#chart { display: block; width: 100%; height: 240px; }
+.empty { text-align: center; color: var(--muted); padding: 48px 16px; font-size: 13px; }
+
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { padding: 10px 14px; text-align: right; white-space: nowrap; }
+th:first-child, td:first-child, th.tl, td.tl { text-align: left; }
+thead th {
+  color: var(--muted); font-size: 12px; font-weight: 500;
+  border-bottom: 1px solid var(--border); background: var(--card); position: sticky; top: 0;
+}
+tbody tr.row { border-bottom: 1px solid var(--border); cursor: pointer; }
+tbody tr.row:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+tbody tr.row.open { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+tbody tr.detail > td { padding: 0; background: color-mix(in srgb, var(--accent) 3%, var(--card)); }
+.expand { display: inline-flex; width: 14px; justify-content: center;
+  color: var(--muted); transition: transform .15s; margin-right: 4px; }
+tr.row.open .expand { transform: rotate(90deg); }
+.gname { font-weight: 600; }
+.badge { display: inline-block; min-width: 58px; text-align: center; padding: 1px 8px;
+  border-radius: 999px; font-size: 12px; }
+.b-ok   { color: var(--ok);   background: var(--ok-bg); }
+.b-bad  { color: var(--bad);  background: var(--bad-bg); }
+.b-warn { color: var(--warn); background: var(--warn-bg); }
+.spark { display: block; }
+.sub { margin: 0; padding: 8px 18px 14px 46px; }
+.sub th { border-bottom: 1px solid var(--border); }
+footer { max-width: 1240px; margin: 20px auto 0; padding: 0 24px;
+  color: var(--muted); font-size: 12px; }
+footer p { margin: 4px 0; }
+a { color: var(--accent); text-decoration: none; }
+.dot-s { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:0; }
+.d-on  { background: var(--ok);   box-shadow: 0 0 0 3px var(--ok-bg); }
+.d-off { background: var(--muted); box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 18%, transparent); }
+.kick { color: var(--bad); border-color: var(--border); padding: 2px 10px; font-size: 12px; }
+.kick:hover { background: var(--bad-bg); border-color: var(--bad); }
+.dup { color: var(--warn); font-size: 11.5px; margin-left: 4px; }
+.trans { display:inline-block; padding:0 7px; border-radius:6px; font-size:11.5px;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.comp { display:inline-block; padding:0 7px; border-radius:6px; font-size:11.5px; margin-left:4px;
+  color: var(--ok); background: var(--ok-bg); }
+.c-off { color: var(--warn); background: var(--warn-bg); }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="dot" id="statusDot"></span>SEKIRO OP · 监控报表</h1>
+  <span class="meta">uptime <b id="uptime">–</b></span>
+  <span class="meta">数据时间 <b id="clock">–</b></span>
+  <span class="spacer"></span>
+  <span class="meta" id="skew" hidden></span>
+  <label class="meta">刷新
+    <select id="interval">
+      <option value="2000" selected>2s</option>
+      <option value="5000">5s</option>
+      <option value="10000">10s</option>
+      <option value="0">暂停</option>
+    </select>
+  </label>
+</header>
+
+<main>
+  <section class="kpis" id="kpis"></section>
+
+  <section class="card">
+    <div class="head">
+      <h2>调用量趋势</h2>
+      <span class="spacer"></span>
+      <div class="seg" id="granSeg">
+        <button data-g="hourly" class="active">按小时 · 24h</button>
+        <button data-g="daily">按天 · 7d</button>
+      </div>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--ok)"></i>成功</span>
+      <span><i style="background:var(--bad)"></i>失败（provider）</span>
+      <span><i style="background:var(--warn)"></i>系统错误（服务端）</span>
+    </div>
+    <svg id="chart" viewBox="0 0 1000 240" preserveAspectRatio="none"></svg>
+    <div class="empty" id="chartEmpty" hidden>暂无调用数据</div>
+  </section>
+
+  <section class="card">
+    <div class="head"><h2>Group 维度明细</h2><span class="spacer"></span>
+      <span class="meta">点击行展开 action 明细</span></div>
+    <div style="overflow-x:auto">
+      <table>
+        <thead><tr>
+          <th class="tl" style="width:26%">group</th>
+          <th>clients</th><th>总量</th><th>成功</th><th>失败</th><th>系统错误</th>
+          <th>成功率</th><th>流量 In/Out（业务字节）</th><th class="tl">24h 趋势</th>
+        </tr></thead>
+        <tbody id="groupsBody"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="groupsEmpty" hidden>暂无 group 调用数据</div>
+  </section>
+
+  <section class="card">
+    <div class="head"><h2>客户端节点</h2><span class="spacer"></span>
+      <span class="meta" id="nodesMeta">–</span></div>
+    <div style="overflow-x:auto">
+      <table>
+        <thead><tr>
+          <th class="tl">状态</th>
+          <th class="tl" style="width:20%">设备名（clientId）</th>
+          <th class="tl">group</th>
+          <th class="tl">IP 地址</th>
+          <th>通道</th>
+          <th class="tl">连接时间</th>
+          <th class="tl">最后活跃</th>
+          <th>操作</th>
+        </tr></thead>
+        <tbody id="nodesBody"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="nodesEmpty" hidden>暂无已注册的客户端</div>
+  </section>
+</main>
+
+<footer>
+  <p>指标说明：失败 = provider 返回业务失败（status≠0）；系统错误 = 服务端拦截（空池 / 参数缺失 / 超时）；
+     流量为<strong>业务字节（压缩前）</strong>——In 按请求 query+body、Out 按协议 payload 累计；
+     WS permessage-deflate 与 HTTP gzip/deflate 协商生效时，网卡上的实际字节小于该值（本指标≠带宽消耗，需精确值请抓包）。
+     数据存内存，重启清零；小时桶保留 48h，天精度由小时桶聚合。</p>
+  <p>sekiro-go · 开源版监控（对齐官方商业版报表口径）· API：<a href="/op/api/stats" target="_blank">/op/api/stats</a>
+     · <a href="/op/api/clients" target="_blank">/op/api/clients</a></p>
+</footer>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let gran = "hourly";
+let expanded = new Set();
+let timer = null;
+
+// ---------- 数据拉取 ----------
+async function poll() {
+  try {
+    const res = await fetch("/op/api/stats", { cache: "no-store" });
+    if (!res.ok) throw new Error(res.status);
+    const d = await res.json();
+    render(d);
+    $("statusDot").style.background = "var(--ok)";
+    $("statusDot").style.boxShadow = "0 0 0 3px var(--ok-bg)";
+    // 时钟偏差提示：仅在偏差 >15s 时出现（正常同机部署不显示，避免与"数据时间"重复；
+    // 阈值取 15s 是为了不被偶发慢响应/高负载下的拉取耗时误触发）
+    const skew = Math.round(Date.now() / 1000 - d.serverTime);
+    const el = $("skew");
+    if (Math.abs(skew) > 15) {
+      el.hidden = false;
+      el.textContent = "⚠ 本机与服务端时钟偏差 " + (skew > 0 ? "+" : "") + skew + "s";
+      el.style.color = "var(--warn)";
+    } else {
+      el.hidden = true;
+    }
+  } catch (e) {
+    $("statusDot").style.background = "var(--bad)";
+    $("statusDot").style.boxShadow = "0 0 0 3px var(--bad-bg)";
+    const el = $("skew");
+    el.hidden = false;
+    el.textContent = "刷新失败（保留上次数据）";
+    el.style.color = "var(--bad)";
+  }
+}
+
+// ---------- 格式化 ----------
+const fmtInt = (n) => n.toLocaleString("zh-CN");
+const fmtKB = (kb) => kb >= 1048576 ? (kb/1048576).toFixed(2)+" GB"
+              : kb >= 1024 ? (kb/1024).toFixed(1)+" MB" : kb.toFixed(1)+" KB";
+const fmtRate = (r) => (r*100).toFixed(r >= 0.995 || r === 0 ? 0 : 1) + "%";
+const rateBadge = (r, total) => {
+  if (!total) return `<span class="badge b-warn">–</span>`;
+  if (r >= 0.99) return `<span class="badge b-ok">${fmtRate(r)}</span>`;
+  if (r >= 0.90) return `<span class="badge b-warn">${fmtRate(r)}</span>`;
+  return `<span class="badge b-bad">${fmtRate(r)}</span>`;
+};
+const esc = (s) => String(s).replace(/[&<>"']/g,
+  (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+
+// ---------- KPI ----------
+function renderKPIs(d) {
+  let tot = { total:0, success:0, fail:0, sysErr:0, bytesInKB:0, bytesOutKB:0 };
+  let clients = 0;
+  for (const g of d.groups) {
+    clients += g.clients;
+    tot.total += g.metrics.total; tot.success += g.metrics.success;
+    tot.fail += g.metrics.fail; tot.sysErr += g.metrics.sysErr;
+    tot.bytesInKB += g.metrics.bytesInKB; tot.bytesOutKB += g.metrics.bytesOutKB;
+  }
+  const rate = tot.total ? tot.success / tot.total : 0;
+  const kpis = [
+    ["Groups", fmtInt(d.groups.length)],
+    ["在线 Clients", fmtInt(clients)],
+    ["QPS（1 分钟均值）", d.qps.toFixed(1)],
+    ["累计调用", fmtInt(tot.total)],
+    ["成功率", `<span style="color:${rate>=0.99||rate===0?"var(--text)":rate>=0.9?"var(--warn)":"var(--bad)"}">${fmtRate(rate)}</span>`],
+    ["流量 In / Out（业务字节，压缩前）", `${fmtKB(tot.bytesInKB)} / ${fmtKB(tot.bytesOutKB)}`],
+  ];
+  $("kpis").innerHTML = kpis.map(([l, v]) =>
+    `<div class="kpi"><div class="label">${l}</div><div class="value">${v}</div></div>`).join("");
+  $("uptime").textContent = d.uptime;
+  $("clock").textContent = new Date(d.serverTime * 1000).toLocaleString("zh-CN", { hour12: false });
+}
+
+// ---------- 趋势图（SVG 堆叠柱） ----------
+function renderChart(d) {
+  const s = d[gran];
+  const svg = $("chart");
+  const n = s.buckets.length;
+  const any = s.total.some((v) => v > 0);
+  $("chartEmpty").hidden = any;
+  if (!any) { svg.innerHTML = ""; return; }
+
+  const W = 1000, H = 240, PL = 46, PR = 10, PT = 14, PB = 30;
+  const iw = W - PL - PR, ih = H - PT - PB;
+  const max = Math.max(...s.total, 1);
+  const nice = niceMax(max);
+  const bw = Math.min(28, (iw / n) * 0.62);
+  const x = (i) => PL + (iw / n) * (i + 0.5);
+  const y = (v) => PT + ih * (1 - v / nice);
+
+  let out = [];
+  // 网格与 Y 轴
+  for (let i = 0; i <= 4; i++) {
+    const v = nice * i / 4, yy = y(v);
+    out.push(`<line x1="${PL}" y1="${yy}" x2="${W-PR}" y2="${yy}" stroke="var(--border)" stroke-width="1"/>`);
+    out.push(`<text x="${PL-6}" y="${yy+4}" text-anchor="end" font-size="11" fill="var(--muted)">${kfmt(v)}</text>`);
+  }
+  // 堆叠柱
+  for (let i = 0; i < n; i++) {
+    const parts = [
+      ["success", s.success[i] || 0, "var(--ok)"],
+      ["fail", s.fail[i] || 0, "var(--bad)"],
+      ["sysErr", s.sysErr[i] || 0, "var(--warn)"],
+    ];
+    let acc = 0;
+    const label = bucketLabel(s.buckets[i], gran);
+    for (const [name, v, color] of parts) {
+      if (v <= 0) continue;
+      const h = (v / nice) * ih;
+      const yTop = PT + ih - (acc + v) / nice * ih;
+      out.push(`<rect x="${(x(i)-bw/2).toFixed(1)}" y="${yTop.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(h,.8).toFixed(1)}" fill="${color}" opacity=".92"><title>${esc(label)} ${name==="success"?"成功":name==="fail"?"失败":"系统错误"}：${fmtInt(v)}</title></rect>`);
+      acc += v;
+    }
+    // X 轴标签（柱多时隔 2 显示）
+    if (n <= 12 || i % Math.ceil(n/12) === 0) {
+      out.push(`<text x="${x(i).toFixed(1)}" y="${H-8}" text-anchor="middle" font-size="10.5" fill="var(--muted)">${esc(xLabel(s.buckets[i], gran))}</text>`);
+    }
+  }
+  svg.innerHTML = out.join("");
+}
+function niceMax(v) { const p = Math.pow(10, Math.floor(Math.log10(v))); const m = v / p;
+  return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p; }
+function kfmt(v) { return v >= 1e6 ? (v/1e6)+"M" : v >= 1e3 ? (v/1e3)+"k" : v; }
+function xLabel(ts, g) {
+  const d = new Date(ts * 1000);
+  if (g === "hourly") {
+    // 24h 窗口跨两天：带日期避免同小时歧义
+    return `${d.getDate()}日${d.getHours().toString().padStart(2, "0")}时`;
+  }
+  return (d.getMonth()+1) + "/" + d.getDate();
+}
+function bucketLabel(ts, g) {
+  const d = new Date(ts * 1000);
+  return g === "hourly"
+    ? `${d.getMonth()+1}/${d.getDate()} ${d.getHours().toString().padStart(2,"0")}:00`
+    : `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()}`;
+}
+
+// ---------- Group 表 ----------
+function renderGroups(d) {
+  const body = $("groupsBody");
+  const has = d.groups.length > 0;
+  $("groupsEmpty").hidden = has;
+  let html = "";
+  for (const g of d.groups) {
+    const m = g.metrics;
+    const open = expanded.has(g.group);
+    html += `<tr class="row ${open ? "open" : ""}" data-group="${esc(g.group)}">
+      <td class="tl"><span class="expand">▸</span><span class="gname">${esc(g.group)}</span></td>
+      <td>${fmtInt(g.clients)}</td>
+      <td><b>${fmtInt(m.total)}</b></td>
+      <td style="color:var(--ok)">${fmtInt(m.success)}</td>
+      <td style="color:var(--bad)">${fmtInt(m.fail)}</td>
+      <td style="color:var(--warn)">${fmtInt(m.sysErr)}</td>
+      <td>${rateBadge(m.successRate, m.total)}</td>
+      <td>${fmtKB(m.bytesInKB)} / ${fmtKB(m.bytesOutKB)}</td>
+      <td class="tl">${sparkline(g.series)}</td>
+    </tr>`;
+    if (open) {
+      html += `<tr class="detail"><td colspan="9">${subTable(g)}</td></tr>`;
+    }
+  }
+  body.innerHTML = html;
+  body.querySelectorAll("tr.row").forEach((tr) => {
+    tr.addEventListener("click", () => {
+      const name = tr.dataset.group;
+      expanded.has(name) ? expanded.delete(name) : expanded.add(name);
+      renderGroups(lastData);
+    });
+  });
+}
+function subTable(g) {
+  if (!g.actions.length) return `<div class="sub" style="color:var(--muted)">无 action 统计</div>`;
+  let rows = "";
+  for (const a of g.actions) {
+    const m = a.metrics;
+    rows += `<tr>
+      <td class="tl">${esc(a.action)}</td>
+      <td><b>${fmtInt(m.total)}</b></td>
+      <td style="color:var(--ok)">${fmtInt(m.success)}</td>
+      <td style="color:var(--bad)">${fmtInt(m.fail)}</td>
+      <td style="color:var(--warn)">${fmtInt(m.sysErr)}</td>
+      <td>${rateBadge(m.successRate, m.total)}</td>
+      <td>${fmtKB(m.bytesInKB)} / ${fmtKB(m.bytesOutKB)}</td>
+    </tr>`;
+  }
+  return `<table class="sub"><thead><tr>
+    <th class="tl">action</th><th>总量</th><th>成功</th><th>失败</th><th>系统错误</th><th>成功率</th><th>流量 In/Out</th>
+  </tr></thead><tbody>${rows}</tbody></table>`;
+}
+function sparkline(series) {
+  const n = series.length, max = Math.max(...series, 1);
+  const W = 120, H = 28;
+  let pts = "";
+  for (let i = 0; i < n; i++) {
+    pts += (i * W / (n-1)).toFixed(1) + "," + (H - 2 - (series[i] / max) * (H - 5)).toFixed(1) + " ";
+  }
+  const last = series[n-1] > 0;
+  return `<svg class="spark" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+    <polyline points="${pts.trim()}" fill="none" stroke="var(--accent)" stroke-width="1.6"
+      opacity="${last ? "1" : ".45"}"/>
+  </svg>`;
+}
+
+// ---------- 客户端节点 ----------
+let prevNodeCount = -1;
+const fmtAgo = (iso) => {
+  if (!iso || iso.startsWith("0001-")) return "–";
+  const s = Math.max(0, Math.floor((serverNowMs() - Date.parse(iso)) / 1000));
+  if (s < 60) return s + " 秒前";
+  if (s < 3600) return Math.floor(s/60) + " 分钟前";
+  if (s < 86400) return Math.floor(s/3600) + " 小时前";
+  return Math.floor(s/86400) + " 天前";
+};
+// 与服务端对齐的当前时间（用最近一次 stats 的 serverTime 校正本机偏差）
+let serverSkewMs = 0;
+const serverNowMs = () => Date.now() - serverSkewMs;
+
+async function pollNodes() {
+  try {
+    const res = await fetch("/op/api/clients", { cache: "no-store" });
+    if (!res.ok) throw new Error(res.status);
+    const d = await res.json();
+    renderNodes(d.clients || []);
+  } catch (e) { /* 拉取失败保留上次数据，与 stats 行为一致 */ }
+}
+
+function renderNodes(list) {
+  const body = $("nodesBody");
+  const has = list.length > 0;
+  $("nodesEmpty").hidden = has;
+  $("nodesMeta").textContent = has ? `共 ${list.length} 个连接` : "–";
+
+  // 按设备名分组：clientId 升序，重复注册（新连接顶旧）标注重复次数
+  const sorted = [...list].sort((a, b) =>
+    a.group < b.group ? -1 : a.group > b.group ? 1 :
+    a.clientId < b.clientId ? -1 : a.clientId > b.clientId ? 1 : 0);
+  const dupCount = {};
+  for (const c of sorted) dupCount[c.clientId] = (dupCount[c.clientId] || 0) + 1;
+
+  let html = "";
+  for (const c of sorted) {
+    html += `<tr>
+      <td class="tl"><span class="dot-s ${c.online ? "d-on" : "d-off"}"></span>${c.online ? "在线" : "离线"}</td>
+      <td class="tl"><b>${esc(c.clientId)}</b>${dupCount[c.clientId] > 1 ? `<span class="dup">重复 ${dupCount[c.clientId]} 连接</span>` : ""}</td>
+      <td class="tl">${esc(c.group)}</td>
+      <td class="tl">${esc(c.ip || "–")}</td>
+      <td><span class="trans">${esc(c.transport || "–")}</span>${c.compression ? `<span class="comp ${c.compression === "off" ? "c-off" : ""}" title="${c.compression === "off" ? "客户端未声明 permessage-deflate，大文本带宽放大 ~10x；常见成因：前置代理剥了 Sec-WebSocket-Extensions" : "permessage-deflate 协商成功"}">${esc(c.compression)}</span>` : ""}</td>
+      <td class="tl" title="${esc(c.connectedAt)}">${fmtAgo(c.connectedAt)}</td>
+      <td class="tl" title="${esc(c.lastActive || "")}">${c.lastActive ? fmtAgo(c.lastActive) : "–"}</td>
+      <td>${c.online ? `<button class="kick" data-group="${esc(c.group)}" data-id="${esc(c.clientId)}">踢下线</button>` : ""}</td>
+    </tr>`;
+  }
+  body.innerHTML = html;
+  body.querySelectorAll("button.kick").forEach((btn) => {
+    btn.addEventListener("click", () => kickClient(btn.dataset.group, btn.dataset.id));
+  });
+  // 数量变化时刷新一次 stats（KPI 的「在线 Clients」与节点面板保持一致）
+  if (prevNodeCount >= 0 && prevNodeCount !== list.length) poll();
+  prevNodeCount = list.length;
+}
+
+async function kickClient(group, id) {
+  if (!confirm(`确定踢下线「${id}」（group: ${group}）？\n将立即断开该设备的连接，其正在处理的调用会失败。`)) return;
+  try {
+    const res = await fetch("/op/api/clients/kick", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ group, clientId: id }),
+    });
+    const d = await res.json();
+    if (!d.kicked) alert("该设备已不在线（可能刚断开）");
+  } catch (e) {
+    alert("踢下线请求失败：" + e);
+  }
+  pollNodes();
+  poll();
+}
+
+// ---------- 主渲染 ----------
+let lastData = { groups: [], hourly: emptySeries(24), daily: emptySeries(7) };
+function emptySeries(n) { return { buckets: new Array(n).fill(0), total: new Array(n).fill(0),
+  success: new Array(n).fill(0), fail: new Array(n).fill(0), sysErr: new Array(n).fill(0) }; }
+function render(d) {
+  lastData = d;
+  renderKPIs(d);
+  renderChart(d);
+  renderGroups(d);
+  // 记录服务端时钟偏差，供节点面板「相对时间」显示对齐
+  serverSkewMs = Date.now() - d.serverTime * 1000;
+}
+
+// ---------- 控件 ----------
+function startPolling(ms) {
+  if (timer) { clearInterval(timer); timer = null; }
+  if (ms > 0) { poll(); pollNodes(); timer = setInterval(() => { poll(); pollNodes(); }, ms); }
+}
+$("interval").addEventListener("change", () => startPolling(+$("interval").value));
+$("granSeg").querySelectorAll("button").forEach((b) => {
+  b.addEventListener("click", () => {
+    $("granSeg").querySelectorAll("button").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    gran = b.dataset.g;
+    renderChart(lastData);
+  });
+});
+
+poll();
+pollNodes();
+timer = setInterval(() => { poll(); pollNodes(); }, 2000);
+</script>
+</body>
+</html>

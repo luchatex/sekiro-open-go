@@ -1,0 +1,15 @@
+# sekiro-go 反代示例（Caddy）
+# 用法：caddy run --config deploy/Caddyfile
+# 前提：sekiro.example.com 已解析到本机；服务端监听 127.0.0.1:5612
+#
+# Caddy 自动申请/续期 Let's Encrypt 证书，WebSocket 升级透明支持。
+
+sekiro.example.com {
+	reverse_proxy 127.0.0.1:5612
+
+	# ---- 可选：/op 监控页访问控制（页面无鉴权，公网建议开启）----
+	# 方式一：Basic Auth（生成 hash：caddy hash-password）
+	# basic_auth /op* {
+	# 	admin $2a$14$xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+	# }
+}

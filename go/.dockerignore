@@ -1,0 +1,17 @@
+# 构建上下文裁剪：只保留 Go 源码，加速构建
+.git
+.github
+.idea
+.vscode
+.workbuddy
+.ai-memory
+bin/
+*.exe
+*.test
+*.out
+coverage.txt
+Dockerfile
+.dockerignore
+testdata/golden/
+tools/
+README.md
