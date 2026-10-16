@@ -39,7 +39,9 @@ http://127.0.0.1:5612/op
 - **KPI 总览**：group 数、在线 client 数、QPS（1 分钟均值）、累计调用、成功率、流量 In/Out
 - **趋势图**：按小时（24h）/ 按天（7d）切换，SVG 堆叠柱（成功/失败/系统错误三色）
 - **group 明细表**：六指标 + 24h sparkline，点击行展开 action 子表
-- **数据 API**：`/op/api/stats` 返回 JSON 快照（可自建报表/对接 Grafana JSON datasource）
+- **系统错误分析**：原因分布（timeout / dispatch-failed / caller-abort）+ 最近 100 条事件
+  （时间/group/action/详情/clientId/通道），定位「系统错误 N 条」的具体构成
+- **数据 API**：`/op/api/stats`、`/op/api/errors` 返回 JSON 快照（可自建报表/对接 Grafana JSON datasource）
 - **实现**：`internal/metrics` 内存统计（小时桶保留 48h、天精度由小时桶按本地时区聚合），
   进程重启清零、无持久化；埋点覆盖 HTTP 与二进制 invoker 两条消费通道
 - **开关**：`-op-disable` 或环境变量 `SEKIRO_OP_DISABLE=true` 关闭页面与 API

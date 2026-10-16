@@ -111,7 +111,8 @@ curl "http://127.0.0.1:5612/business/groupList"
 - **趋势图**：24h（小时精度）/ 7d（天精度）SVG 堆叠柱（成功/失败/系统错误三色）
 - **客户端节点面板**：在线状态、设备名、IP、通道类型、WS 压缩协商状态（`deflate`/`off`）、
   连接/最后活跃时间、一键踢下线（带审计日志）
-- **数据 API**：`/op/api/stats`、`/op/api/clients`
+- **系统错误分析**：原因分布（timeout / dispatch-failed / caller-abort）+ 最近 100 条事件明细
+- **数据 API**：`/op/api/stats`、`/op/api/clients`、`/op/api/errors`
 
 ## 仓库结构
 

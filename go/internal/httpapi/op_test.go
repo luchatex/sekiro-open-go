@@ -143,10 +143,12 @@ type statsJSON struct {
 			Rate    float64 `json:"successRate"`
 			OutKB   float64 `json:"bytesOutKB"`
 		} `json:"metrics"`
-		Actions []struct {
+		SysErrReasons map[string]int64 `json:"sysErrReasons"`
+		Actions       []struct {
 			Action string `json:"action"`
 		} `json:"actions"`
 	} `json:"groups"`
+	SysErrReasons map[string]int64 `json:"sysErrReasons"`
 }
 
 func fetchStats(t *testing.T, h http.Handler) statsJSON {

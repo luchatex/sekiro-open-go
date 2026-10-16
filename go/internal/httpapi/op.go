@@ -41,6 +41,11 @@ func isOpKickPath(path string) bool {
 	return strings.EqualFold(path, "/op/api/clients/kick")
 }
 
+// isOpErrorsPath GET /op/api/errors：系统错误原因分布与最近事件。
+func isOpErrorsPath(path string) bool {
+	return strings.EqualFold(path, "/op/api/errors")
+}
+
 // handleOpPage 输出监控页。
 func handleOpPage(w http.ResponseWriter) {
 	data, err := opWeb.ReadFile("web/op.html")
@@ -60,6 +65,20 @@ func handleOpClients(w http.ResponseWriter, mgr *group.Manager) {
 	body, err := json.Marshal(map[string]any{"clients": mgr.ClientDetails()})
 	if err != nil {
 		httpResponseText(w, http.StatusInternalServerError, "marshal clients failed")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(http.StatusOK)
+	w.Write(body)
+}
+
+// handleOpErrors 输出系统错误原因分布与最近事件（/op/api/errors）。
+func handleOpErrors(w http.ResponseWriter) {
+	body, err := json.Marshal(metrics.Default().Errors())
+	if err != nil {
+		httpResponseText(w, http.StatusInternalServerError, "marshal errors failed")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

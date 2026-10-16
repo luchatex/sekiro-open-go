@@ -70,8 +70,9 @@ func (m *Metrics) addResult(k Kind, bytesOut int64) {
 type key struct{ group, action string }
 
 type entity struct {
-	m     Metrics
-	hours map[int64]*Metrics // unixHour（UTC）→ 该小时累计
+	m       Metrics
+	hours   map[int64]*Metrics // unixHour（UTC）→ 该小时累计
+	reasons map[string]int64   // 系统错误原因 → 计数（仅 SysErr 写入）
 }
 
 type secBucket struct {
@@ -86,11 +87,17 @@ type Recorder struct {
 	ents    map[key]*entity
 	secs    [60]secBucket // 环形秒桶（最近 60s QPS）
 	writes  int64         // 惰性 GC 计数
+
+	// 系统错误原因维度（见 errors.go）：全局聚合 + 最近事件环形缓冲
+	reasons map[string]*reasonStat
+	ring    [errRingCap]SysErrEvent
+	ringN   int64 // 累计写入数（取模定位）
 }
 
 // New 创建记录器。
 func New() *Recorder {
-	return &Recorder{started: time.Now(), ents: make(map[key]*entity)}
+	return &Recorder{started: time.Now(), ents: make(map[key]*entity),
+		reasons: make(map[string]*reasonStat)}
 }
 
 var def = New()
@@ -239,11 +246,12 @@ type ActionJSON struct {
 
 // GroupJSON group 维度统计。
 type GroupJSON struct {
-	Group   string       `json:"group"`
-	Clients int          `json:"clients"` // 在线 client 数（由调用方填充）
-	Metrics MetricJSON   `json:"metrics"`
-	Actions []ActionJSON `json:"actions"`
-	Series  []int64      `json:"series"` // 最近 24 小时桶 total
+	Group         string           `json:"group"`
+	Clients       int              `json:"clients"` // 在线 client 数（由调用方填充）
+	Metrics       MetricJSON       `json:"metrics"`
+	SysErrReasons map[string]int64 `json:"sysErrReasons,omitempty"` // 系统错误原因分布
+	Actions       []ActionJSON     `json:"actions"`
+	Series        []int64          `json:"series"` // 最近 24 小时桶 total
 }
 
 // SeriesJSON 时间序列（顶层聚合）。
@@ -257,12 +265,13 @@ type SeriesJSON struct {
 
 // Snapshot 全量快照。
 type Snapshot struct {
-	ServerTime int64       `json:"serverTime"`
-	Uptime     string      `json:"uptime"`
-	QPS        float64     `json:"qps"`
-	Groups     []GroupJSON `json:"groups"`
-	Hourly     *SeriesJSON `json:"hourly"` // 最近 24 小时桶
-	Daily      *SeriesJSON `json:"daily"`  // 最近 7 天桶（本地时区）
+	ServerTime    int64            `json:"serverTime"`
+	Uptime        string           `json:"uptime"`
+	QPS           float64          `json:"qps"`
+	SysErrReasons map[string]int64 `json:"sysErrReasons,omitempty"` // 系统错误原因分布（全局）
+	Groups        []GroupJSON      `json:"groups"`
+	Hourly        *SeriesJSON      `json:"hourly"` // 最近 24 小时桶
+	Daily         *SeriesJSON      `json:"daily"`  // 最近 7 天桶（本地时区）
 }
 
 // Snapshot 生成全量快照：hourly 为最近 24 个小时桶、daily 为最近 7 天桶。
@@ -283,9 +292,10 @@ func (r *Recorder) Snapshot(clients func(group string) int, registered []string)
 	}
 
 	type agg struct {
-		m      Metrics
-		hours  map[int64]*Metrics
-		action map[string]Metrics
+		m       Metrics
+		hours   map[int64]*Metrics
+		action  map[string]Metrics
+		reasons map[string]int64
 	}
 	groups := make(map[string]*agg)
 
@@ -293,10 +303,14 @@ func (r *Recorder) Snapshot(clients func(group string) int, registered []string)
 	for k, e := range r.ents {
 		g := groups[k.group]
 		if g == nil {
-			g = &agg{hours: make(map[int64]*Metrics), action: make(map[string]Metrics)}
+			g = &agg{hours: make(map[int64]*Metrics), action: make(map[string]Metrics),
+				reasons: make(map[string]int64)}
 			groups[k.group] = g
 		}
 		g.m.add2(&e.m)
+		for reason, n := range e.reasons {
+			g.reasons[reason] += n
+		}
 		for h, m := range e.hours {
 			if g.hours[h] == nil {
 				g.hours[h] = &Metrics{}
@@ -332,6 +346,15 @@ func (r *Recorder) Snapshot(clients func(group string) int, registered []string)
 			Group:   name,
 			Metrics: toMetricJSON(g.m),
 			Series:  bucketValues(g.hours, hourIDs, func(m *Metrics) int64 { return m.Total }),
+		}
+		if len(g.reasons) > 0 {
+			gj.SysErrReasons = g.reasons
+			if snap.SysErrReasons == nil {
+				snap.SysErrReasons = make(map[string]int64)
+			}
+			for reason, n := range g.reasons {
+				snap.SysErrReasons[reason] += n
+			}
 		}
 		if clients != nil {
 			gj.Clients = clients(name)

@@ -185,6 +185,37 @@ a { color: var(--accent); text-decoration: none; }
     </div>
     <div class="empty" id="nodesEmpty" hidden>暂无已注册的客户端</div>
   </section>
+
+  <section class="card">
+    <div class="head"><h2>系统错误分析</h2><span class="spacer"></span>
+      <span class="meta" id="errMeta">–</span></div>
+    <div style="overflow-x:auto">
+      <table>
+        <thead><tr>
+          <th class="tl">原因</th>
+          <th class="tl">说明</th>
+          <th>次数</th>
+          <th class="tl">最近发生</th>
+        </tr></thead>
+        <tbody id="errReasonsBody"></tbody>
+      </table>
+    </div>
+    <div style="overflow-x:auto; border-top:1px solid var(--border)">
+      <table>
+        <thead><tr>
+          <th class="tl">时间</th>
+          <th class="tl">group</th>
+          <th class="tl">action</th>
+          <th class="tl">原因</th>
+          <th class="tl">详情</th>
+          <th class="tl">clientId</th>
+          <th>通道</th>
+        </tr></thead>
+        <tbody id="errRecentBody"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="errEmpty" hidden>当前无系统错误</div>
+  </section>
 </main>
 
 <footer>
@@ -193,7 +224,8 @@ a { color: var(--accent); text-decoration: none; }
      WS permessage-deflate 与 HTTP gzip/deflate 协商生效时，网卡上的实际字节小于该值（本指标≠带宽消耗，需精确值请抓包）。
      数据存内存，重启清零；小时桶保留 48h，天精度由小时桶聚合。</p>
   <p>sekiro-go · 开源版监控（对齐官方商业版报表口径）· API：<a href="/op/api/stats" target="_blank">/op/api/stats</a>
-     · <a href="/op/api/clients" target="_blank">/op/api/clients</a></p>
+     · <a href="/op/api/clients" target="_blank">/op/api/clients</a>
+     · <a href="/op/api/errors" target="_blank">/op/api/errors</a></p>
 </footer>
 
 <script>
@@ -478,6 +510,51 @@ async function kickClient(group, id) {
   poll();
 }
 
+// ---------- 系统错误分析 ----------
+const ERR_REASON_DESC = {
+  "timeout": "provider 未在 invoke_timeout 内回包（默认 15s，可按调用传 invoke_timeout 调整）",
+  "dispatch-failed": "分配失败/上游丢失：空池、无设备、group 缺失、上游连接断开等（细分看下方事件详情）",
+  "caller-abort": "调用方（HTTP/WS 消费方）提前断开连接，未等到响应",
+};
+const ERR_REASON_CLS = { "timeout": "b-warn", "dispatch-failed": "b-bad", "caller-abort": "" };
+const fmtAgoSec = (sec) => sec ? fmtAgo(new Date(sec * 1000).toISOString()) : "–";
+
+async function pollErrors() {
+  try {
+    const res = await fetch("/op/api/errors");
+    renderErrors(await res.json());
+  } catch (e) { $("errMeta").textContent = "拉取失败"; }
+}
+
+function renderErrors(d) {
+  $("errMeta").textContent = `共 ${d.total} 条 · 展示最近 ${d.recent.length} 条`;
+  $("errEmpty").hidden = d.total > 0;
+  const reasons = d.reasons || [];
+  let rh = "";
+  for (const r of reasons) {
+    rh += `<tr>
+      <td class="tl"><span class="badge ${ERR_REASON_CLS[r.reason] || ""}">${esc(r.reason)}</span></td>
+      <td class="tl">${esc(ERR_REASON_DESC[r.reason] || "–")}</td>
+      <td>${r.count}</td>
+      <td class="tl" title="${r.lastTime}">${fmtAgoSec(r.lastTime)}</td>
+    </tr>`;
+  }
+  $("errReasonsBody").innerHTML = rh;
+  let eh = "";
+  for (const e of (d.recent || [])) {
+    eh += `<tr>
+      <td class="tl" title="${e.time}">${fmtAgoSec(e.time)}</td>
+      <td class="tl">${esc(e.group || "–")}</td>
+      <td class="tl">${esc(e.action || "–")}</td>
+      <td class="tl"><span class="badge ${ERR_REASON_CLS[e.reason] || ""}">${esc(e.reason)}</span></td>
+      <td class="tl">${esc(e.message || "–")}</td>
+      <td class="tl">${esc(e.clientId || "–")}</td>
+      <td>${esc(e.channel || "–")}</td>
+    </tr>`;
+  }
+  $("errRecentBody").innerHTML = eh;
+}
+
 // ---------- 主渲染 ----------
 let lastData = { groups: [], hourly: emptySeries(24), daily: emptySeries(7) };
 function emptySeries(n) { return { buckets: new Array(n).fill(0), total: new Array(n).fill(0),
@@ -494,7 +571,7 @@ function render(d) {
 // ---------- 控件 ----------
 function startPolling(ms) {
   if (timer) { clearInterval(timer); timer = null; }
-  if (ms > 0) { poll(); pollNodes(); timer = setInterval(() => { poll(); pollNodes(); }, ms); }
+  if (ms > 0) { poll(); pollNodes(); pollErrors(); timer = setInterval(() => { poll(); pollNodes(); pollErrors(); }, ms); }
 }
 $("interval").addEventListener("change", () => startPolling(+$("interval").value));
 $("granSeg").querySelectorAll("button").forEach((b) => {

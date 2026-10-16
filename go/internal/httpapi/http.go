@@ -50,6 +50,10 @@ func Handler(mgr *group.Manager, comp *compress.Manager, log *slog.Logger, opEna
 				handleOpClients(w, mgr)
 				return
 			}
+			if isOpErrorsPath(path) {
+				handleOpErrors(w)
+				return
+			}
 			if isOpKickPath(path) {
 				handleOpKick(w, r, mgr, log)
 				return

@@ -70,6 +70,20 @@ func (r *Record) finishMetric(k metrics.Kind, bytesOut int64) {
 	r.Meter.Finish(g, a, k, bytesOut)
 }
 
+// finishSysErr 系统错误终结埋点：除计数外携带原因/message/clientId/通道，
+// 供监控页「系统错误分析」聚合与事件列表使用（message 为服务端固定文案）。
+func (r *Record) finishSysErr(reason, message string) {
+	if r.Meter == nil {
+		return
+	}
+	g, a := r.metricKeys()
+	channel := "http"
+	if r.invokerSeq >= 0 {
+		channel = "invoker"
+	}
+	r.Meter.RecordSysErr(g, a, reason, message, r.clientID(), channel)
+}
+
 // attached 写成功后回调（对齐 afterForward）：启动超时定时器。
 func (r *Record) attached(c *Client, seq int32) {
 	r.mu.Lock()
@@ -103,7 +117,7 @@ func (r *Record) fail(message, clientID string) {
 	}
 	r.mu.Unlock()
 	r.sink.RespondCommon(-1, message, clientID, r.commonSeq())
-	r.finishMetric(metrics.SysErr, 0) // 服务端拦截类错误
+	r.finishSysErr(metrics.ErrDispatch, message) // 分配失败/上游丢失（细分见 message）
 }
 
 // Abort 消费方已断开：终结 Record 但不写回任何响应。
@@ -135,7 +149,7 @@ func (r *Record) Abort() {
 		delete(c.pending, seq)
 		c.mu.Unlock()
 	}
-	r.finishMetric(metrics.SysErr, 0)
+	r.finishSysErr(metrics.ErrAbort, "") // 调用方提前断开
 }
 
 // onTimeout 对齐 scheduleTimeout（含分段流的滚动续期）。
@@ -159,7 +173,7 @@ func (r *Record) onTimeout() {
 		c.mu.Unlock()
 	}
 	r.sink.RespondCommon(-1, "timeout", r.clientID(), r.commonSeq())
-	r.finishMetric(metrics.SysErr, 0) // 超时归入系统错误
+	r.finishSysErr(metrics.ErrTimeout, "timeout") // provider 未在超时内回包
 }
 
 // resultKind 从 provider 响应包判定调用结果：
