@@ -134,17 +134,17 @@ func TestE2E_WSCompression_BigChinesePayload(t *testing.T) {
 			t.Fatalf("run %d: found %d replacement chars (U+FFFD)", i, bad)
 		}
 		// 提取 data 字段内容：一次性透传分支响应格式为
-		// {"status":0,"data":"<payload>","clientId":"<id>"}（clientId 尾随，
-		// orderedjson Set 追加），data 值内无引号/反斜杠
+		// {"clientId":"<id>","data":"<payload>","status":0}（对齐原版
+		// fastjson toJSONString 默认 SortField → 字典序），data 值内无引号/反斜杠
 		marker := `"data":"`
 		idx := bytes.Index(body, []byte(marker))
 		if idx < 0 {
 			t.Fatalf("run %d: no data field", i)
 		}
 		rest := body[idx+len(marker):]
-		endIdx := bytes.Index(rest, []byte(`","clientId":`))
+		endIdx := bytes.Index(rest, []byte(`","status":0}`))
 		if endIdx < 0 {
-			t.Fatalf("run %d: data not terminated by clientId suffix: %q", i, string(rest[max(0, len(rest)-40):]))
+			t.Fatalf("run %d: data not terminated by status suffix: %q", i, string(rest[max(0, len(rest)-40):]))
 		}
 		got := unquoteJSONFast(string(rest[:endIdx]))
 		if got != payload {

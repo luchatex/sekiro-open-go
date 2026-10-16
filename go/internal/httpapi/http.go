@@ -9,6 +9,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -425,14 +426,15 @@ func (s *httpSink) RespondPacket(p *protocol.Packet) {
 			s.finish()
 			return
 		}
-		var cid []byte
-		cid, _ = json.Marshal(s.clientIDOf(p))
+		var cidBuf bytes.Buffer
+		orderedjson.AppendJSONString(&cidBuf, s.clientIDOf(p))
 		msg := "null"
 		if errMsg != "" {
-			m, _ := json.Marshal(errMsg)
-			msg = string(m)
+			var mb bytes.Buffer
+			orderedjson.AppendJSONString(&mb, errMsg)
+			msg = mb.String()
 		}
-		body := `{"clientId":` + string(cid) + `,"message":` + msg + `,"status":` +
+		body := `{"clientId":` + cidBuf.String() + `,"message":` + msg + `,"status":` +
 			strconv.Itoa(status) + `,"data":` + string(dataJSON) + `}`
 		s.writeOnce(protocol.HTTPContentTypeJSON, []byte(body))
 		return
@@ -449,12 +451,17 @@ func (s *httpSink) RespondPacket(p *protocol.Packet) {
 	}
 
 	// 一次性响应分支（兼容 sekiro V1/V2）
+	//
+	// 对齐原版 NettyUtils.buildHttpResponse once-call 非速 JSON 分支：
+	// JSON.parse → put clientId → toJSONString（默认 SortField → 递归字典序，
+	// FjProbe/FjProbe3 实证）。因此用 MarshalJSONSorted 而非插入序 MarshalJSON，
+	// clientId 经排序合并进字典序位置而非尾随。
 	ct := p.GetHeader(protocol.PayloadContentType)
 	data := p.Data
 	if mainSub(ct) == "application/json" {
 		if jm, err := orderedjson.Parse(data); err == nil {
 			jm.Set("clientId", s.clientIDOf(p))
-			if nb, err := jm.MarshalJSON(); err == nil {
+			if nb, err := jm.MarshalJSONSorted(); err == nil {
 				data = nb
 			}
 		}

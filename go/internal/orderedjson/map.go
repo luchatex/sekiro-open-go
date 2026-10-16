@@ -1,5 +1,15 @@
 // Package orderedjson 提供保序 JSON 对象，对齐 fastjson Feature.OrderedField
 // 与 Java 版请求参数的 LinkedHashMap 语义：键序 = 插入序，转发报文逐键可复现。
+//
+// 序列化分两种模式：
+//   - MarshalJSON：插入序（对齐 Java 侧 OrderedField 解析语义）
+//   - MarshalJSONSorted：递归字典序（对齐 fastjson toJSONString 默认
+//     SortField 特性）——原版所有调用方可见的响应 JSON 均经 toJSONString
+//     输出，故响应组装路径使用本方法
+//
+// 两种模式的字符串转义均对齐 fastjson SerializeWriter.writeString：
+// 仅转义 " \ 与控制字符（\b \f \n \r \t 短形式，其余 \u00XX 大写十六进制，
+// 含 0x7F），不转义 HTML 字符（< > &）、斜杠与单引号。
 package orderedjson
 
 import (
@@ -103,7 +113,7 @@ func (m *Map) SetAll(src *Map) {
 	}
 }
 
-// MarshalJSON 按插入序输出。
+// MarshalJSON 按插入序输出（对齐 Java 侧 OrderedField 解析语义）。
 func (m *Map) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	buf.WriteByte('{')
@@ -111,11 +121,7 @@ func (m *Map) MarshalJSON() ([]byte, error) {
 		if i > 0 {
 			buf.WriteByte(',')
 		}
-		kb, err := json.Marshal(k)
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(kb)
+		AppendJSONString(&buf, k)
 		buf.WriteByte(':')
 		vb, err := marshalValue(m.vals[i])
 		if err != nil {
@@ -127,6 +133,96 @@ func (m *Map) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// MarshalJSONSorted 递归字典序输出，对齐 fastjson toJSONString 默认开启的
+// SortField 特性（MapSerializer 对所有层级的 map 键排序，含数组内对象；
+// FjProbe3 实证）。原版调用方响应（once-call 重序列化、invoke 参数下发）
+// 均经 toJSONString，故这些路径应使用本方法。
+//
+// 键排序采用 Go 字节序（UTF-8），与 Java String.compareTo（UTF-16 code unit）
+// 仅在增补平面字符与 U+E000..U+FFFF 混排时存在理论差异，键场景可忽略。
+func (m *Map) MarshalJSONSorted() ([]byte, error) {
+	var buf bytes.Buffer
+	if err := writeSorted(&buf, m); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func writeSorted(buf *bytes.Buffer, v any) error {
+	switch t := v.(type) {
+	case *Map:
+		keys := append([]string(nil), t.keys...)
+		sort.Strings(keys)
+		buf.WriteByte('{')
+		for i, k := range keys {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			AppendJSONString(buf, k)
+			buf.WriteByte(':')
+			val, _ := t.Get(k)
+			if err := writeSorted(buf, val); err != nil {
+				return err
+			}
+		}
+		buf.WriteByte('}')
+	case []any:
+		buf.WriteByte('[')
+		for i, e := range t {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			if err := writeSorted(buf, e); err != nil {
+				return err
+			}
+		}
+		buf.WriteByte(']')
+	default:
+		vb, err := marshalValue(v)
+		if err != nil {
+			return err
+		}
+		buf.Write(vb)
+	}
+	return nil
+}
+
+// AppendJSONString 以 fastjson SerializeWriter.writeString 的转义规则向 buf
+// 追加带引号的 JSON 字符串（FjProbe3/FjProbe4 实证）：
+//   - 转义：" \\ 与控制字符——\b \f \n \r \t 用短形式，
+//     其余 <0x20 及 0x7F 用 \u00XX（十六进制大写）
+//   - 不转义：< > & ' / 及一切 >=0x80 的 UTF-8 字节（中文原样输出）
+func AppendJSONString(buf *bytes.Buffer, s string) {
+	buf.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '"':
+			buf.WriteString(`\"`)
+		case c == '\\':
+			buf.WriteString(`\\`)
+		case c == '\b':
+			buf.WriteString(`\b`)
+		case c == '\f':
+			buf.WriteString(`\f`)
+		case c == '\n':
+			buf.WriteString(`\n`)
+		case c == '\r':
+			buf.WriteString(`\r`)
+		case c == '\t':
+			buf.WriteString(`\t`)
+		case c < 0x20 || c == 0x7f:
+			const hex = "0123456789ABCDEF"
+			buf.WriteString(`\u00`)
+			buf.WriteByte(hex[c>>4])
+			buf.WriteByte(hex[c&0xf])
+		default:
+			buf.WriteByte(c)
+		}
+	}
+	buf.WriteByte('"')
+}
+
 func marshalValue(v any) ([]byte, error) {
 	switch t := v.(type) {
 	case nil:
@@ -134,7 +230,9 @@ func marshalValue(v any) ([]byte, error) {
 	case json.Number:
 		return []byte(t.String()), nil
 	case string:
-		return json.Marshal(t)
+		var buf bytes.Buffer
+		AppendJSONString(&buf, t)
+		return buf.Bytes(), nil
 	case bool:
 		return json.Marshal(t)
 	case *Map:

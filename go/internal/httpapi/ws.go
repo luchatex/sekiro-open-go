@@ -50,7 +50,9 @@ func (t *wsTransport) SendInvoke(params *orderedjson.Map, seq int32) error {
 	m := orderedjson.New()
 	m.SetAll(params)
 	m.Set(protocol.WSSeqNumber, json.Number(strconv.FormatInt(int64(seq), 10)))
-	body, err := m.MarshalJSON()
+	// MarshalJSONSorted：对齐原版 invoke 参数下发经 fastjson toJSONString
+	// （默认 SortField → 字典序，__sekiro_seq__ 排在首位）
+	body, err := m.MarshalJSONSorted()
 	if err != nil {
 		return err
 	}

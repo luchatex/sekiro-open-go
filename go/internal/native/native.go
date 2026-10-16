@@ -260,7 +260,7 @@ type nativeTransport struct{ ch *Channel }
 func (t *nativeTransport) SendInvoke(params *orderedjson.Map, seq int32) error {
 	pkt := protocol.NewPacket(protocol.STypeInvoke)
 	pkt.Seq = seq
-	data, err := params.MarshalJSON()
+	data, err := params.MarshalJSONSorted()
 	if err != nil {
 		return err
 	}

@@ -74,3 +74,30 @@ node tests/js/ws_big_payload.js 5621   # Java 对照
 node tests/js/ws_fragment_test.js 5621   # Java（修补版）
 node tests/js/ws_fragment_test.js 5620   # Go 版（预期 16/16）
 ```
+
+## 原版 fastjson 序列化行为实证（2026-10-17，响应格式对齐依据）
+
+用 tests/lib 私有 jar（sekiro-business-api.jar 内置 shaded fastjson）+ JDK 21
+驱动原版代码实证（探针源码见本节末），产出对齐 `orderedjson` 包的黄金断言
+（go/internal/orderedjson/fastjson_align_test.go）：
+
+| 行为 | 原版 fastjson 实证输出 |
+|---|---|
+| HTML 字符 `<` `>` `&` | **不转义**（Go `json.Marshal` 默认转义 `\u003c`，爬虫 HTML 大文本必受影响） |
+| 斜杠 `/`、单引号 `'` | 不转义 |
+| 中文 | raw UTF-8 原样输出 |
+| 键序（toJSONString 默认） | **递归字典序**（SortField 为 DEFAULT_GENERATE_FEATURE，嵌套对象/数组内对象均排序，FjProbe3 实证） |
+| 控制字符 | `\b \f \n \r \t` 短形式；其余 `<0x20` 及 `0x7F` → `\u00XX` 十六进制大写 |
+| 数字字面量 | 保留原文（`1.50` 输出 `1.50`） |
+| fast-json 分支（quickJsonDecode） | 固定序 `{"clientId":..,"message":..,"status":<int>,"data":<原样嵌入>}`，data 为 provider 侧序列化结果不再重组 |
+
+据此对齐的 Go 侧路径：once-call 响应（MarshalJSONSorted）、fast-json 信封
+clientId/message 转义、invoke 参数下发（native+WS，MarshalJSONSorted，
+`__sekiro_seq__` 排序后居首）。
+
+```java
+// /tmp/fjtest/FjProbe3.java（节选）——javac -cp sekiro-business-api.jar
+Object o = JSON.parse("{\"zz\":{\"m2\":1,\"a1\":\"<b>&x</b>\",\"kk\":[{\"y\":2,\"b\":3}]},\"aa\":1.50,\"mM\":\"http://e.com/p?q=1&z=2\"}");
+jo.putAll((JSONObject) o); jo.put("clientId", "dev-1");
+// → {"aa":1.50,"clientId":"dev-1","mM":"http://e.com/p?q=1&z=2","zz":{"a1":"<b>&x</b>","kk":[{"b":3,"y":2}],"m2":1}}
+```
