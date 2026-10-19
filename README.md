@@ -78,6 +78,7 @@ make build                      # 产出 bin/sekiro
 
 # 方式二：Docker（拉取预构建镜像，多架构 amd64/arm64，随版本发布更新）
 docker run -d --name sekiro -p 5612:5612 --restart unless-stopped \
+  -e SEKIRO_OP_PASSWORD='监控密码' \
   ghcr.io/luchatex/sekiro-open-go:latest
 
 # 方式三：本地构建镜像
@@ -93,6 +94,7 @@ curl "http://127.0.0.1:5612/business/groupList"
 | `-debug` | `SEKIRO_LOCAL_DEBUG` | 关 | 调试日志（打印完整调用参数，生产慎用） |
 | `-log-level` | `SEKIRO_LOG_LEVEL` | `info` | 日志级别；`warn` 可关逐笔调用日志 |
 | `-op-disable` | `SEKIRO_OP_DISABLE` | 关 | 关闭 `/op` 监控页及全部 `/op/api/*` |
+| `-op-password` | `SEKIRO_OP_PASSWORD` | 空 | `/op` 监控路径访问密码；连续输错 3 次锁定来源 IP 2 分钟。空 = 无鉴权 |
 | `-tls-cert/-tls-key` | `SEKIRO_TLS_CERT/KEY` | 空 | 同时提供则启用 wss 监听 |
 | `-tls-port` | `SEKIRO_TLS_PORT` | `5613` | wss 监听端口 |
 
@@ -113,6 +115,9 @@ curl "http://127.0.0.1:5612/business/groupList"
   连接/最后活跃时间、一键踢下线（带审计日志）
 - **系统错误分析**：原因分布（timeout / dispatch-failed / caller-abort）+ 最近 100 条事件明细
 - **数据 API**：`/op/api/stats`、`/op/api/clients`、`/op/api/errors`
+- **密码保护**（v1.1.0+）：`-op-password` / `SEKIRO_OP_PASSWORD` 启用登录访问
+  （12h 会话 Cookie；连续输错 3 次锁定来源 IP 2 分钟），见上方配置参数表；
+  curl 脚本先 `POST /op/api/login` 拿 Cookie 再携带访问
 
 ## 仓库结构
 

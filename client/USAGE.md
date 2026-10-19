@@ -166,6 +166,7 @@ new SekiroClient('wss://127.0.0.1:5613', { group: 'demoGroup', clientId: 'web-1'
 # 服务端（go/ 目录构建）+ 监控页
 cd go && go build -o bin/sekiro.exe ./cmd/sekiro && ./bin/sekiro.exe --port 5612
 # 浏览器打开 http://127.0.0.1:5612/op 观察 provider 在线数与调用量
+# 若服务端启用 -op-password，打开 /op 会先弹出登录框（连续 3 次错锁 IP 2 分钟）
 
 # 3MB 中文乱码回归（增强版客户端）
 node tests/js/enhanced_regression.js 5612

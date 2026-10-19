@@ -28,7 +28,8 @@ caddy run --config deploy/Caddyfile
 ```
 
 自动 HTTPS、自动续期、WebSocket 升级透明支持。已包含 `/op` 监控页的
-Basic Auth 示例（默认注释，按需开启）。
+Basic Auth 示例（默认注释，按需开启）——v1.1.0 起也可改用服务端内置的
+`-op-password`（带防爆破锁定），nginx Basic Auth 与其取其一即可。
 
 ## Nginx
 
@@ -110,7 +111,9 @@ HTTP API 同理：`https://sekiro.example.com/business/invoke?...`。
 ## 其他注意
 
 - WSS 下 permessage-deflate 压缩照常协商生效（TLS 隧道内）
-- `/op` 监控页无鉴权，公网暴露时务必启用本目录配置中的访问控制段
+- `/op` 监控页鉴权二选一：v1.1.0+ 服务端内置 `-op-password`（登录会话 +
+  连续 3 次失败锁 IP 2 分钟），或沿用本目录 nginx 的 Basic Auth/IP 白名单段；
+  二者取其一即可，都不启用时页面无鉴权
 - 服务端不实现原生 TLS 的原因：单端口按首包字节探测协议，TLS 握手
   首字节 0x16 会被判未知协议拒绝；原生 TLS 需要独立监听模式且要求
   所有 native provider 支持 TLS，收益不成比例
