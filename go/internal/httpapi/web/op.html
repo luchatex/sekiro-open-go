@@ -112,7 +112,7 @@ a { color: var(--accent); text-decoration: none; }
 </style>
 </head>
 <body>
-<div id="loginMask" hidden style="position:fixed;inset:0;background:rgba(15,23,42,.55);backdrop-filter:blur(2px);z-index:99;display:flex;align-items:center;justify-content:center;">
+<div id="loginMask" style="position:fixed;inset:0;background:rgba(15,23,42,.55);backdrop-filter:blur(2px);z-index:99;display:none;align-items:center;justify-content:center;">
   <form onsubmit="event.preventDefault();doLogin()" style="background:#fff;border-radius:12px;padding:28px 32px;box-shadow:0 12px 40px rgba(0,0,0,.25);width:320px;font:14px/1.6 system-ui,sans-serif;color:#1e293b;">
     <div style="font-size:17px;font-weight:700;margin-bottom:4px;">SEKIRO OP</div>
     <div style="color:#64748b;margin-bottom:14px;">监控路径已启用密码保护，请登录</div>
@@ -246,7 +246,7 @@ let timer = null;
 
 // ---------- 登录（OpPassword 启用时，任一 API 返回 401 弹出遮罩） ----------
 function showLogin() {
-  $("loginMask").hidden = false;
+  $("loginMask").style.display = "flex"; // 切换 style.display 而非 hidden：内联 display 会压过 [hidden] 规则
   if (timer) { clearInterval(timer); timer = null; } // 未登录不轮询，避免反复 401
 }
 async function doLogin() {
@@ -263,7 +263,7 @@ async function doLogin() {
     return;
   }
   if (!res.ok) { $("loginMsg").textContent = "密码错误（连续 3 次将锁定 2 分钟）"; return; }
-  $("loginMask").hidden = true;
+  $("loginMask").style.display = "none";
   $("loginMsg").textContent = ""; $("loginPwd").value = "";
   startPolling(+$("interval").value);
 }
