@@ -57,7 +57,11 @@ func Handler(mgr *group.Manager, comp *compress.Manager, log *slog.Logger, opEna
 				case isOpLogoutPath(path):
 					opGuard.handleOpLogout(w, r)
 					return
-				case isOpPath(path), isOpStatsPath(path), isOpClientsPath(path),
+				case isOpPath(path):
+					// 页面壳始终放行（v1.1.1 修复）：/op 本身不含任何监控
+					// 数据（全部经 /op/api/* 拉取），前端在 API 401 时自动
+					// 弹出登录遮罩——否则浏览器直接看到裸 401 JSON
+				case isOpStatsPath(path), isOpClientsPath(path),
 					isOpKickPath(path), isOpErrorsPath(path):
 					if !opGuard.checkAuth(w, r) {
 						return

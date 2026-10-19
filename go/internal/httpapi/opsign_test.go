@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -135,8 +136,9 @@ func TestOpAuthGateOnHandler(t *testing.T) {
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 
-	// 未登录：/op 页面与 API 全 401
-	for _, p := range []string{"/op", "/op/api/stats", "/op/api/clients", "/op/api/errors"} {
+	// 未登录：/op 页面壳放行（200，登录遮罩由前端按 API 401 弹出）；
+	// /op/api/* 全 401
+	for _, p := range []string{"/op/api/stats", "/op/api/clients", "/op/api/errors"} {
 		resp, err := http.Get(srv.URL + p)
 		if err != nil {
 			t.Fatalf("%s: %v", p, err)
@@ -145,6 +147,15 @@ func TestOpAuthGateOnHandler(t *testing.T) {
 		if resp.StatusCode != 401 {
 			t.Fatalf("%s: %d, want 401", p, resp.StatusCode)
 		}
+	}
+	pageResp, err := http.Get(srv.URL + "/op")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageBody, _ := io.ReadAll(pageResp.Body)
+	pageResp.Body.Close()
+	if pageResp.StatusCode != 200 || !strings.Contains(string(pageBody), "loginMask") {
+		t.Fatalf("/op shell: %d (should serve page with loginMask)", pageResp.StatusCode)
 	}
 
 	// 登录拿 Cookie（jar 自动携带），会话内访问放行
