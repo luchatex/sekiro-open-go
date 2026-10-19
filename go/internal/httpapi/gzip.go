@@ -75,6 +75,22 @@ func parseEncodingPart(part string) (string, float64) {
 	return token, q
 }
 
+// wireCountWriter 统计实际写入底层 ResponseWriter 的字节数
+//（压缩后 payload；不含 HTTP 头与 chunked 框架开销）。
+type wireCountWriter struct {
+	http.ResponseWriter
+	n int64
+}
+
+func (w *wireCountWriter) Write(b []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(b)
+	w.n += int64(n)
+	return n, err
+}
+
+// Unwrap 保持 ResponseController 穿透链完整（body 读超时保护依赖）。
+func (w *wireCountWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 // compressWriter 包装 http.ResponseWriter，按协商结果压缩响应体。
 // enc == "" 时透传。实现 http.Flusher 以支撑分段流 flush 透传。
 type compressWriter struct {
@@ -82,6 +98,7 @@ type compressWriter struct {
 	enc   string
 	gz    io.WriteCloser
 	wrote bool
+	wc    *wireCountWriter // 实际出站字节计数（流量统计用）
 }
 
 // Unwrap 暴露底层 ResponseWriter。
@@ -90,8 +107,12 @@ type compressWriter struct {
 // 否则 SetReadDeadline 到不了真正的连接——body 读取超时保护会失效。
 func (cw *compressWriter) Unwrap() http.ResponseWriter { return cw.ResponseWriter }
 
+// WireBytes 返回实际出站字节数（压缩后）。
+func (cw *compressWriter) WireBytes() int64 { return cw.wc.n }
+
 func newCompressWriter(w http.ResponseWriter, enc string) *compressWriter {
-	return &compressWriter{ResponseWriter: w, enc: enc}
+	wc := &wireCountWriter{ResponseWriter: w}
+	return &compressWriter{ResponseWriter: wc, enc: enc, wc: wc}
 }
 
 func (cw *compressWriter) WriteHeader(code int) {

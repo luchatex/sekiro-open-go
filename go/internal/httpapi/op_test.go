@@ -142,6 +142,7 @@ type statsJSON struct {
 			SysErr  int64   `json:"sysErr"`
 			Rate    float64 `json:"successRate"`
 			OutKB   float64 `json:"bytesOutKB"`
+			WireKB  float64 `json:"bytesOutWireKB"`
 		} `json:"metrics"`
 		SysErrReasons map[string]int64 `json:"sysErrReasons"`
 		Actions       []struct {
@@ -226,5 +227,66 @@ func TestOpStatsFailAndSysErr(t *testing.T) {
 	j := findGroup(t, s, "g-empty")
 	if s.Groups[j].Metrics.SysErr != 1 {
 		t.Errorf("g-empty sysErr = %d, want 1", s.Groups[j].Metrics.SysErr)
+	}
+}
+
+// TestOpStatsWireBytesCompressed HTTP 消费方压缩生效时，快照的实际出站
+// 字节（bytesOutWireKB）应大于 0 且显著小于逻辑值（bytesOutKB）。
+func TestOpStatsWireBytesCompressed(t *testing.T) {
+	metrics.Reset()
+	mgr := group.NewManager(slog.Default())
+	h := Handler(mgr, compress.NewManager(), slog.Default(), true, "")
+	registerEchoClient(t, mgr, "g-wire", "c1", 0)
+
+	big := strings.Repeat("A", 200000) // 高可压内容
+	req := httptest.NewRequest(http.MethodGet,
+		"/business/invoke?group=g-wire&action=big&param="+big, nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("invoke: %d", rec.Code)
+	}
+	if ce := rec.Header().Get("Content-Encoding"); ce != "gzip" {
+		t.Fatalf("content-encoding = %q, want gzip", ce)
+	}
+	if rec.Body.Len() >= 200000 {
+		t.Fatalf("response not compressed: %d bytes", rec.Body.Len())
+	}
+
+	s := fetchStats(t, h)
+	g := s.Groups[findGroup(t, s, "g-wire")]
+	if g.Metrics.OutKB <= 0 {
+		t.Fatalf("bytesOutKB = %v, want > 0", g.Metrics.OutKB)
+	}
+	if g.Metrics.WireKB <= 0 {
+		t.Fatalf("bytesOutWireKB = %v, want > 0 (gzip negotiated)", g.Metrics.WireKB)
+	}
+	if g.Metrics.WireKB >= g.Metrics.OutKB {
+		t.Fatalf("wire %v should be < logical %v", g.Metrics.WireKB, g.Metrics.OutKB)
+	}
+}
+
+// TestOpStatsWireBytesUncompressed 未协商压缩（无 Accept-Encoding）时，
+// 透传路径同样产出实际出站计数。
+func TestOpStatsWireBytesUncompressed(t *testing.T) {
+	metrics.Reset()
+	mgr := group.NewManager(slog.Default())
+	h := Handler(mgr, compress.NewManager(), slog.Default(), true, "")
+	registerEchoClient(t, mgr, "g-plain", "c1", 0)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/business/invoke?group=g-plain&action=a&param=hello", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("invoke: %d", rec.Code)
+	}
+
+	s := fetchStats(t, h)
+	g := s.Groups[findGroup(t, s, "g-plain")]
+	// 未压缩时 wire = HTTP 响应体字节（含 clientId 注入等信封开销），
+	// 与逻辑值（纯 payload）同量级但不必相等；断言已实际统计（> 0）
+	if g.Metrics.WireKB <= 0 {
+		t.Fatalf("bytesOutWireKB = %v, want > 0", g.Metrics.WireKB)
 	}
 }

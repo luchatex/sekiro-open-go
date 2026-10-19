@@ -34,7 +34,10 @@ type Metrics struct {
 	Fail     int64
 	SysErr   int64
 	BytesIn  int64 // 请求字节（query + body / invoker payload）
-	BytesOut int64 // 响应字节
+	BytesOut int64 // 响应字节（协议 payload，压缩前逻辑值）
+	// BytesOutWire 实际出站字节：HTTP 消费方按压缩后写入字节数实测（v1.1.3+）；
+	// WS/native 消费方暂不统计（记 0），前端显示 –
+	BytesOutWire int64
 }
 
 // SuccessRate 成功率（无调用时返回 0）。
@@ -53,9 +56,10 @@ func (m *Metrics) add2(o *Metrics) {
 	m.SysErr += o.SysErr
 	m.BytesIn += o.BytesIn
 	m.BytesOut += o.BytesOut
+	m.BytesOutWire += o.BytesOutWire
 }
 
-func (m *Metrics) addResult(k Kind, bytesOut int64) {
+func (m *Metrics) addResult(k Kind, bytesOut, wireOut int64) {
 	switch k {
 	case Success:
 		m.Success++
@@ -65,6 +69,7 @@ func (m *Metrics) addResult(k Kind, bytesOut int64) {
 		m.SysErr++
 	}
 	m.BytesOut += bytesOut
+	m.BytesOutWire += wireOut
 }
 
 type key struct{ group, action string }
@@ -132,7 +137,9 @@ func (r *Recorder) Invoke(group, action string, bytesIn int64) {
 }
 
 // Finish 调用终结：按结果分类计数并累加响应流量。
-func (r *Recorder) Finish(group, action string, k Kind, bytesOut int64) {
+// bytesOut 为协议 payload 逻辑字节；wireOut 为实际出站字节
+//（HTTP 消费方压缩后实测，其他通道传 0）。
+func (r *Recorder) Finish(group, action string, k Kind, bytesOut, wireOut int64) {
 	if r == nil || group == "" {
 		return
 	}
@@ -140,8 +147,8 @@ func (r *Recorder) Finish(group, action string, k Kind, bytesOut int64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	e := r.entityLocked(group, action)
-	e.m.addResult(k, bytesOut)
-	e.hourLocked(h).addResult(k, bytesOut)
+	e.m.addResult(k, bytesOut, wireOut)
+	e.hourLocked(h).addResult(k, bytesOut, wireOut)
 }
 
 // AddOut 仅累加响应流量（分段流中间包：有字节产出但未终结调用）。
@@ -224,6 +231,8 @@ type MetricJSON struct {
 	SuccessRate float64 `json:"successRate"`
 	BytesInKB   float64 `json:"bytesInKB"`
 	BytesOutKB  float64 `json:"bytesOutKB"`
+	// 实际出站（压缩后）KB；未统计的通道（WS/native 消费方）省略该字段
+	BytesOutWireKB float64 `json:"bytesOutWireKB,omitempty"`
 }
 
 func toMetricJSON(m Metrics) MetricJSON {
@@ -233,8 +242,9 @@ func toMetricJSON(m Metrics) MetricJSON {
 		Fail:        m.Fail,
 		SysErr:      m.SysErr,
 		SuccessRate: m.SuccessRate(),
-		BytesInKB:   float64(m.BytesIn) / 1024,
-		BytesOutKB:  float64(m.BytesOut) / 1024,
+		BytesInKB:      float64(m.BytesIn) / 1024,
+		BytesOutKB:     float64(m.BytesOut) / 1024,
+		BytesOutWireKB: float64(m.BytesOutWire) / 1024,
 	}
 }
 

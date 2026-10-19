@@ -77,8 +77,8 @@ func (r *Recorder) RecordSysErr(group, action, reason, message, clientID, channe
 	if group != "" {
 		// 计数路径与 Finish(SysErr) 完全一致（总量/小时桶）
 		e := r.entityLocked(group, action)
-		e.m.addResult(SysErr, 0)
-		e.hourLocked(h).addResult(SysErr, 0)
+		e.m.addResult(SysErr, 0, 0)
+		e.hourLocked(h).addResult(SysErr, 0, 0)
 		if e.reasons == nil {
 			e.reasons = make(map[string]int64)
 		}

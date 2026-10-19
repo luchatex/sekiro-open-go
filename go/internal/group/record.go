@@ -61,13 +61,20 @@ func (r *Record) metricKeys() (group, action string) {
 	return r.Params.GetString(protocol.ParamGroup), r.Params.GetString(protocol.ParamAction)
 }
 
-// finishMetric 终结埋点。
+// finishMetric 终结埋点。bytesOut 为协议 payload 逻辑字节；
+// 实际出站字节（压缩后）从 sink 采集（HTTP 消费方的 compressWriter
+// 计数，WS/native 消费方 sink 无该能力记 0）。
+// 必须在 sink.RespondPacket 写完全部响应之后调用，否则计数漏末包。
 func (r *Record) finishMetric(k metrics.Kind, bytesOut int64) {
 	if r.Meter == nil {
 		return
 	}
+	var wire int64
+	if wb, ok := r.sink.(interface{ WireBytes() int64 }); ok {
+		wire = wb.WireBytes()
+	}
 	g, a := r.metricKeys()
-	r.Meter.Finish(g, a, k, bytesOut)
+	r.Meter.Finish(g, a, k, bytesOut, wire)
 }
 
 // finishSysErr 系统错误终结埋点：除计数外携带原因/message/clientId/通道，
@@ -238,7 +245,12 @@ func (r *Record) deliver(p *protocol.Packet) {
 		}
 	}
 
-	// 指标埋点：终结包按 status 分类计数；分段流中间包只累加响应流量
+	p.AddHeader(protocol.HeaderClientID, r.clientID())
+	r.sink.RespondPacket(p)
+
+	// 指标埋点：终结包按 status 分类计数；分段流中间包只累加响应流量。
+	// 必须在响应写完之后采集（finishMetric 需读 sink 的实际出站字节计数，
+	// 提前调用会漏掉本包的压缩后字节）
 	if r.Meter != nil {
 		if finish {
 			r.finishMetric(r.resultKind(p), int64(len(p.Data)))
@@ -247,7 +259,4 @@ func (r *Record) deliver(p *protocol.Packet) {
 			r.Meter.AddOut(g, a, int64(len(p.Data)))
 		}
 	}
-
-	p.AddHeader(protocol.HeaderClientID, r.clientID())
-	r.sink.RespondPacket(p)
 }

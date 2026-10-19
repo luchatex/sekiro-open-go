@@ -11,11 +11,11 @@ func TestRecorderCounts(t *testing.T) {
 	r.Invoke("g1", "actA", 50)
 	r.Invoke("g1", "actB", 10)
 	r.Invoke("g2", "actA", 5)
-	r.Finish("g1", "actA", Success, 200)
-	r.Finish("g1", "actA", Success, 300)
-	r.Finish("g1", "actA", Fail, 10)
-	r.Finish("g1", "actB", SysErr, 0)
-	r.Finish("g2", "actA", Success, 8)
+	r.Finish("g1", "actA", Success, 200, 180)
+	r.Finish("g1", "actA", Success, 300, 260)
+	r.Finish("g1", "actA", Fail, 10, 9)
+	r.Finish("g1", "actB", SysErr, 0, 0)
+	r.Finish("g2", "actA", Success, 8, 8)
 
 	snap := r.Snapshot(nil, nil)
 	if len(snap.Groups) != 2 {
@@ -74,7 +74,7 @@ func TestRecorderQPSSecondBuckets(t *testing.T) {
 func TestNilRecorderSafe(t *testing.T) {
 	var r *Recorder
 	r.Invoke("g", "a", 1) // 不应 panic
-	r.Finish("g", "a", Success, 1)
+	r.Finish("g", "a", Success, 1, 1)
 	if r.QPS() != 0 {
 		t.Error("nil qps != 0")
 	}

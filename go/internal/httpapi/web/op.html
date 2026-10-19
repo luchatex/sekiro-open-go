@@ -166,7 +166,7 @@ a { color: var(--accent); text-decoration: none; }
         <thead><tr>
           <th class="tl" style="width:26%">group</th>
           <th>clients</th><th>总量</th><th>成功</th><th>失败</th><th>系统错误</th>
-          <th>成功率</th><th>流量 In/Out（业务字节）</th><th class="tl">24h 趋势</th>
+          <th>成功率</th><th>流量 In / Out逻辑 / Out实际</th><th class="tl">24h 趋势</th>
         </tr></thead>
         <tbody id="groupsBody"></tbody>
       </table>
@@ -229,8 +229,9 @@ a { color: var(--accent); text-decoration: none; }
 
 <footer>
   <p>指标说明：失败 = provider 返回业务失败（status≠0）；系统错误 = 服务端拦截（空池 / 参数缺失 / 超时）；
-     流量为<strong>业务字节（压缩前）</strong>——In 按请求 query+body、Out 按协议 payload 累计；
-     WS permessage-deflate 与 HTTP gzip/deflate 协商生效时，网卡上的实际字节小于该值（本指标≠带宽消耗，需精确值请抓包）。
+     流量 Out 双口径：<strong>逻辑</strong> = 协议 payload（压缩前）；
+     <strong>实际</strong> = HTTP 消费方压缩后实测出站字节（WS permessage-deflate /
+     native 通道消费方暂不统计，显示 –）。In 按请求 query+body 累计。
      数据存内存，重启清零；小时桶保留 48h，天精度由小时桶聚合。</p>
   <p>sekiro-go · 开源版监控（对齐官方商业版报表口径）· API：<a href="/op/api/stats" target="_blank">/op/api/stats</a>
      · <a href="/op/api/clients" target="_blank">/op/api/clients</a>
@@ -315,13 +316,14 @@ const esc = (s) => String(s).replace(/[&<>"']/g,
 
 // ---------- KPI ----------
 function renderKPIs(d) {
-  let tot = { total:0, success:0, fail:0, sysErr:0, bytesInKB:0, bytesOutKB:0 };
+  let tot = { total:0, success:0, fail:0, sysErr:0, bytesInKB:0, bytesOutKB:0, bytesOutWireKB:0 };
   let clients = 0;
   for (const g of d.groups) {
     clients += g.clients;
     tot.total += g.metrics.total; tot.success += g.metrics.success;
     tot.fail += g.metrics.fail; tot.sysErr += g.metrics.sysErr;
     tot.bytesInKB += g.metrics.bytesInKB; tot.bytesOutKB += g.metrics.bytesOutKB;
+    tot.bytesOutWireKB += g.metrics.bytesOutWireKB || 0;
   }
   const rate = tot.total ? tot.success / tot.total : 0;
   const kpis = [
@@ -330,7 +332,7 @@ function renderKPIs(d) {
     ["QPS（1 分钟均值）", d.qps.toFixed(1)],
     ["累计调用", fmtInt(tot.total)],
     ["成功率", `<span style="color:${rate>=0.99||rate===0?"var(--text)":rate>=0.9?"var(--warn)":"var(--bad)"}">${fmtRate(rate)}</span>`],
-    ["流量 In / Out（业务字节，压缩前）", `${fmtKB(tot.bytesInKB)} / ${fmtKB(tot.bytesOutKB)}`],
+    ["流量 In / Out（逻辑 / 实际）", `${fmtKB(tot.bytesInKB)} / ${fmtKB(tot.bytesOutKB)} / ${tot.bytesOutWireKB ? fmtKB(tot.bytesOutWireKB) : "–"}`],
   ];
   $("kpis").innerHTML = kpis.map(([l, v]) =>
     `<div class="kpi"><div class="label">${l}</div><div class="value">${v}</div></div>`).join("");
@@ -420,7 +422,7 @@ function renderGroups(d) {
       <td style="color:var(--bad)">${fmtInt(m.fail)}</td>
       <td style="color:var(--warn)">${fmtInt(m.sysErr)}</td>
       <td>${rateBadge(m.successRate, m.total)}</td>
-      <td>${fmtKB(m.bytesInKB)} / ${fmtKB(m.bytesOutKB)}</td>
+      <td>${fmtKB(m.bytesInKB)} / ${fmtKB(m.bytesOutKB)} / ${m.bytesOutWireKB ? fmtKB(m.bytesOutWireKB) : "–"}</td>
       <td class="tl">${sparkline(g.series)}</td>
     </tr>`;
     if (open) {
@@ -448,11 +450,11 @@ function subTable(g) {
       <td style="color:var(--bad)">${fmtInt(m.fail)}</td>
       <td style="color:var(--warn)">${fmtInt(m.sysErr)}</td>
       <td>${rateBadge(m.successRate, m.total)}</td>
-      <td>${fmtKB(m.bytesInKB)} / ${fmtKB(m.bytesOutKB)}</td>
+      <td>${fmtKB(m.bytesInKB)} / ${fmtKB(m.bytesOutKB)} / ${m.bytesOutWireKB ? fmtKB(m.bytesOutWireKB) : "–"}</td>
     </tr>`;
   }
   return `<table class="sub"><thead><tr>
-    <th class="tl">action</th><th>总量</th><th>成功</th><th>失败</th><th>系统错误</th><th>成功率</th><th>流量 In/Out</th>
+    <th class="tl">action</th><th>总量</th><th>成功</th><th>失败</th><th>系统错误</th><th>成功率</th><th>流量 In / Out逻辑 / Out实际</th>
   </tr></thead><tbody>${rows}</tbody></table>`;
 }
 function sparkline(series) {

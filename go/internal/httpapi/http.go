@@ -169,6 +169,9 @@ func handleInvoke(w http.ResponseWriter, r *http.Request, mgr *group.Manager, lo
 	// 监控埋点：入口记总量与请求流量（query + body 字节）
 	mtr := metrics.Default()
 	sink := &httpSink{w: w, closed: make(chan struct{})}
+	if cw, ok := w.(*compressWriter); ok {
+		sink.cw = cw // 实际出站字节（压缩后）统计来源
+	}
 	timeout := timeFromMillis(params.GetInt(protocol.ParamInvokeTimeout))
 	rec := group.NewRecord(params, sink, -1, timeout)
 	rec.Meter = mtr
@@ -414,6 +417,7 @@ func isWebSocketUpgrade(r *http.Request) bool {
 
 type httpSink struct {
 	w      http.ResponseWriter
+	cw     *compressWriter // 非 nil 时提供实际出站字节（压缩后）
 	closed chan struct{}
 	once   sync.Once
 
@@ -423,6 +427,15 @@ type httpSink struct {
 }
 
 func (s *httpSink) Closed() <-chan struct{} { return s.closed }
+
+// WireBytes 实际出站字节（压缩后），供 Record.finishMetric 采集；
+// 未经压缩包装器（测试直连等）返回 0。
+func (s *httpSink) WireBytes() int64 {
+	if s.cw != nil {
+		return s.cw.WireBytes()
+	}
+	return 0
+}
 
 func (s *httpSink) finish() { s.once.Do(func() { close(s.closed) }) }
 
