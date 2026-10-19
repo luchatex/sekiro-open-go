@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 )
 
 const (
@@ -76,15 +77,19 @@ func parseEncodingPart(part string) (string, float64) {
 }
 
 // wireCountWriter 统计实际写入底层 ResponseWriter 的字节数
-//（压缩后 payload；不含 HTTP 头与 chunked 框架开销）。
+// （压缩后 payload；不含 HTTP 头与 chunked 框架开销）。
+//
+// 计数用原子量：写入发生在 HTTP handler 协程（含 defer Close 刷压缩器），
+// 而 WireBytes 可能被 provider 响应回调协程读取（Record.finishMetric），
+// 两者无 happens-before 关系，普通 int64 会被 -race 判定为数据竞争。
 type wireCountWriter struct {
 	http.ResponseWriter
-	n int64
+	n atomic.Int64
 }
 
 func (w *wireCountWriter) Write(b []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(b)
-	w.n += int64(n)
+	w.n.Add(int64(n))
 	return n, err
 }
 
@@ -108,7 +113,7 @@ type compressWriter struct {
 func (cw *compressWriter) Unwrap() http.ResponseWriter { return cw.ResponseWriter }
 
 // WireBytes 返回实际出站字节数（压缩后）。
-func (cw *compressWriter) WireBytes() int64 { return cw.wc.n }
+func (cw *compressWriter) WireBytes() int64 { return cw.wc.n.Load() }
 
 func newCompressWriter(w http.ResponseWriter, enc string) *compressWriter {
 	wc := &wireCountWriter{ResponseWriter: w}

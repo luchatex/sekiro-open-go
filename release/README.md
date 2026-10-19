@@ -20,9 +20,17 @@ GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o sekiro ./cmd/se
 
 部署与自检方法见 [deploy/](../deploy/) 与 [go/README.md](../go/README.md)。
 
-## 历史
+## v1.0.0
 
-v1.0.0 为手工出包（构建基线 `6c1756e`），校验清单留档于
-[SHA256SUMS.txt](./SHA256SUMS.txt)；该版本产物仍可在
-[Releases](https://github.com/luchatex/sekiro-open-go/releases/tag/v1.0.0) 下载。
-自 v1.0.1 起产物一律由 CI 构建。
+首个正式版本，涵盖：
+
+- 与原 Java 版兼容的线上协议（HTTP / WebSocket / native 三通道）
+- 监控报表 `/op`（含 `-op-password` 登录保护）
+- 出流量按压缩后实际字节统计
+- 修复原版 WebSocket 分片场景下的 UTF-8 解码乱码
+
+单静态二进制、无 JVM 依赖。各平台产物与校验清单 `SHA256SUMS.txt` 见
+[Releases 页面](https://github.com/luchatex/sekiro-open-go/releases)。
+
+后续版本沿用语义化版本：缺陷修复升 patch（`v1.0.1`），新增特性升 minor
+（`v1.1.0`）。

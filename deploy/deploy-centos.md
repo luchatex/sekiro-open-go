@@ -1,6 +1,7 @@
 # 部署到 CentOS（Linux 静态二进制）
 
-本文对应 `release/` 目录下已构建好的发布产物（详见 [../release/README.md](../release/README.md)），
+本文对应 [Releases 页面](https://github.com/luchatex/sekiro-open-go/releases) 发布的产物
+（详见 [../release/README.md](../release/README.md)），
 目标机为 CentOS 7/8/Stream、Rocky、Alma 等（x86_64 与 aarch64 均有产物；
 **静态链接、无 glibc 版本依赖、无需安装任何运行时**）。
 
@@ -8,20 +9,20 @@
 
 CentOS 取 **Linux x86_64** 三个文件即可（aarch64 机器改用 `-arm64` 版本）：
 
-| 文件 | 平台 | 说明 | sha256（前 16 位） |
-|---|---|---|---|
-| `release/sekiro-linux-amd64` | Linux x86_64 | 服务端主程序 | `f5d1f397…` |
-| `release/sekiro-linux-arm64` | Linux aarch64 | 服务端主程序 | `6aa427e5…` |
-| `release/loadtest-linux-amd64` | Linux x86_64 | 压测/自检工具（provider + invoke 双模式） | `f38baec2…` |
+| 文件 | 平台 | 说明 |
+|---|---|---|
+| `sekiro-linux-amd64` | Linux x86_64 | 服务端主程序 |
+| `sekiro-linux-arm64` | Linux aarch64 | 服务端主程序 |
+| `loadtest-linux-amd64` | Linux x86_64 | 压测/自检工具（provider + invoke 双模式） |
 
-Windows / macOS 产物同目录提供（`sekiro-windows-amd64.exe`、`sekiro-darwin-arm64`）。
-完整校验值见 `release/SHA256SUMS.txt`：
+Windows / macOS 产物同名提供（`sekiro-windows-amd64.exe`、`sekiro-darwin-arm64`）。
+各版本完整校验值随 Release 附件 `SHA256SUMS.txt` 下发，下载后与本机二进制置于同一目录校验：
 
 ```bash
 sha256sum -c SHA256SUMS.txt
-# f5d1f397037553a8786cedb75c3bcb8f01167b1114e173c2a15416ebb3c34914  sekiro-linux-amd64
-# 6aa427e56d938c2b2060cf44c56e2a0c2ee7da8c1a1f895d547aa1f79971bfb0  sekiro-linux-arm64
-# f38baec2f84043b11cafdd0940b4f25b956bab3d62ac24b6c4d2cab83ac1536c  loadtest-linux-amd64
+# sekiro-linux-amd64: OK
+# sekiro-linux-arm64: OK
+# loadtest-linux-amd64: OK
 ```
 
 构建方式（可复现）：`CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o bin/sekiro-linux-amd64 ./cmd/sekiro`，

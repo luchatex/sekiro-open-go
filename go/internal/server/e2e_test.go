@@ -104,7 +104,7 @@ func (c *wireClient) register(group, id string) {
 
 // waitRegistered 轮询 clientQueue 直到 id 上线。register 是 fire-and-forget，
 // CI 高负载下注册处理可能落后于紧随其后的 invoke——invoke 命中空池直接
-// dispatch-fail，provider 侧 waitInvoke 就会超时（v1.1.1 CI 偶发实锤），
+// dispatch-fail，provider 侧 waitInvoke 就会超时（v1.0.0 CI 偶发实锤），
 // 因此凡 register 后立即发起 invoke 的用例必须先等注册生效。
 func (c *wireClient) waitRegistered(group, id string) {
 	c.t.Helper()

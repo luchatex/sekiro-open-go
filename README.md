@@ -115,7 +115,7 @@ curl "http://127.0.0.1:5612/business/groupList"
   连接/最后活跃时间、一键踢下线（带审计日志）
 - **系统错误分析**：原因分布（timeout / dispatch-failed / caller-abort）+ 最近 100 条事件明细
 - **数据 API**：`/op/api/stats`、`/op/api/clients`、`/op/api/errors`
-- **密码保护**（v1.1.0+）：`-op-password` / `SEKIRO_OP_PASSWORD` 启用登录访问
+- **密码保护**（v1.0.0+）：`-op-password` / `SEKIRO_OP_PASSWORD` 启用登录访问
   （12h 会话 Cookie；连续输错 3 次锁定来源 IP 2 分钟），见上方配置参数表；
   curl 脚本先 `POST /op/api/login` 拿 Cookie 再携带访问
 

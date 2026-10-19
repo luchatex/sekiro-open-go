@@ -35,7 +35,7 @@ type Metrics struct {
 	SysErr   int64
 	BytesIn  int64 // 请求字节（query + body / invoker payload）
 	BytesOut int64 // 响应字节（协议 payload，压缩前逻辑值）
-	// BytesOutWire 实际出站字节：HTTP 消费方按压缩后写入字节数实测（v1.1.3+）；
+	// BytesOutWire 实际出站字节：HTTP 消费方按压缩后写入字节数实测（v1.0.0+）；
 	// WS/native 消费方暂不统计（记 0），前端显示 –
 	BytesOutWire int64
 }
@@ -138,7 +138,7 @@ func (r *Recorder) Invoke(group, action string, bytesIn int64) {
 
 // Finish 调用终结：按结果分类计数并累加响应流量。
 // bytesOut 为协议 payload 逻辑字节；wireOut 为实际出站字节
-//（HTTP 消费方压缩后实测，其他通道传 0）。
+// （HTTP 消费方压缩后实测，其他通道传 0）。
 func (r *Recorder) Finish(group, action string, k Kind, bytesOut, wireOut int64) {
 	if r == nil || group == "" {
 		return
@@ -237,11 +237,11 @@ type MetricJSON struct {
 
 func toMetricJSON(m Metrics) MetricJSON {
 	return MetricJSON{
-		Total:       m.Total,
-		Success:     m.Success,
-		Fail:        m.Fail,
-		SysErr:      m.SysErr,
-		SuccessRate: m.SuccessRate(),
+		Total:          m.Total,
+		Success:        m.Success,
+		Fail:           m.Fail,
+		SysErr:         m.SysErr,
+		SuccessRate:    m.SuccessRate(),
 		BytesInKB:      float64(m.BytesIn) / 1024,
 		BytesOutKB:     float64(m.BytesOut) / 1024,
 		BytesOutWireKB: float64(m.BytesOutWire) / 1024,
