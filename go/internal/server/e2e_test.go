@@ -63,6 +63,7 @@ type wireClient struct {
 	conn net.Conn
 	br   *bufio.Reader
 	t    *testing.T
+	addr string
 }
 
 func dialWire(t *testing.T, addr string) *wireClient {
@@ -72,7 +73,7 @@ func dialWire(t *testing.T, addr string) *wireClient {
 		t.Fatalf("dial: %v", err)
 	}
 	t.Cleanup(func() { conn.Close() })
-	return &wireClient{conn: conn, br: bufio.NewReader(conn), t: t}
+	return &wireClient{conn: conn, br: bufio.NewReader(conn), t: t, addr: addr}
 }
 
 func (c *wireClient) send(p *protocol.Packet) {
@@ -99,6 +100,27 @@ func (c *wireClient) register(group, id string) {
 	p.AddHeader(protocol.HeaderSekiroGroup, group)
 	p.AddHeader(protocol.HeaderClientID, id)
 	c.send(p)
+}
+
+// waitRegistered 轮询 clientQueue 直到 id 上线。register 是 fire-and-forget，
+// CI 高负载下注册处理可能落后于紧随其后的 invoke——invoke 命中空池直接
+// dispatch-fail，provider 侧 waitInvoke 就会超时（v1.1.1 CI 偶发实锤），
+// 因此凡 register 后立即发起 invoke 的用例必须先等注册生效。
+func (c *wireClient) waitRegistered(group, id string) {
+	c.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(fmt.Sprintf("http://%s/business/clientQueue?group=%s", c.addr, group))
+		if err == nil {
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if strings.Contains(string(b), `"`+id+`"`) {
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	c.t.Fatalf("client %s not registered in group %s within 5s", id, group)
 }
 
 // waitInvoke 等待一条下发的调用，返回 (paramsJSON, seq)
@@ -134,6 +156,7 @@ func TestE2E_NativeProvider_HTTPConsumer(t *testing.T) {
 	_, addr := startTestServer(t)
 	cl := dialWire(t, addr)
 	cl.register("e2e", "dev1")
+	cl.waitRegistered("e2e", "dev1")
 
 	// HTTP consumer 调用（含中文参数）
 	url := fmt.Sprintf("http://%s/business/invoke?group=e2e&action=fetchData&param=%s&invoke_timeout=8000",
@@ -203,6 +226,7 @@ func TestE2E_WSFragments_ChineseAllSplitPoints(t *testing.T) {
 	_, addr := startTestServer(t)
 	cl := dialWire(t, addr)
 	cl.register("e2ews", "wsdev1")
+	cl.waitRegistered("e2ews", "wsdev1")
 
 	ws := dialWS(t, addr, "e2ews", "wsdev1")
 	defer ws.close()
@@ -262,6 +286,7 @@ func TestE2E_InvokerChannel(t *testing.T) {
 	// provider
 	cl := dialWire(t, addr)
 	cl.register("e2einv", "dev1")
+	cl.waitRegistered("e2einv", "dev1")
 	// invoker
 	inv := dialWire(t, addr)
 	inv.send(protocol.NewPacket(protocol.ITypeConnect))
@@ -304,6 +329,7 @@ func TestE2E_CompressedResponse(t *testing.T) {
 	_, addr := startTestServer(t)
 	cl := dialWire(t, addr)
 	cl.register("e2egz", "dev1")
+	cl.waitRegistered("e2egz", "dev1")
 
 	type res struct {
 		status int
