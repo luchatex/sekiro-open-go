@@ -64,7 +64,7 @@ func TestSilentWSProviderKeptAlive(t *testing.T) {
 
 	log := discardLogger()
 	mgr := group.NewManager(log)
-	srv := httptest.NewServer(Handler(mgr, compress.NewManager(), log, false))
+	srv := httptest.NewServer(Handler(mgr, compress.NewManager(), log, false, ""))
 	t.Cleanup(srv.Close)
 	t.Cleanup(mgr.Close)
 
@@ -92,7 +92,7 @@ func TestDeadWSProviderReclaimed(t *testing.T) {
 
 	log := discardLogger()
 	mgr := group.NewManager(log)
-	srv := httptest.NewServer(Handler(mgr, compress.NewManager(), log, false))
+	srv := httptest.NewServer(Handler(mgr, compress.NewManager(), log, false, ""))
 	t.Cleanup(srv.Close)
 	t.Cleanup(mgr.Close)
 

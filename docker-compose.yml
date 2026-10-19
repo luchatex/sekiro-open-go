@@ -28,6 +28,9 @@ services:
       SEKIRO_PORT: 5612
       # 调试模式（对齐原版 sekiro.localDebug），生产保持 false
       SEKIRO_LOCAL_DEBUG: "false"
+      # /op 监控路径密码保护：宿主机 .env 定义 OP_PASSWORD 后启用
+      # （未定义则不启用鉴权；连续登录失败 3 次锁定来源 IP 2 分钟）
+      SEKIRO_OP_PASSWORD: "${OP_PASSWORD:-}"
       TZ: Asia/Shanghai
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5612/business/groupList"]

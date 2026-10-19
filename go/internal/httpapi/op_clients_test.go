@@ -73,7 +73,7 @@ func TestOpClientsListAndKick(t *testing.T) {
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	mgr := group.NewManager(log)
-	srv := httptest.NewServer(Handler(mgr, compress.NewManager(), log, true))
+	srv := httptest.NewServer(Handler(mgr, compress.NewManager(), log, true, ""))
 	t.Cleanup(srv.Close)
 	t.Cleanup(mgr.Close)
 
@@ -142,7 +142,7 @@ func TestWSCompressionNegotiation(t *testing.T) {
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	mgr := group.NewManager(log)
-	srv := httptest.NewServer(Handler(mgr, compress.NewManager(), log, true))
+	srv := httptest.NewServer(Handler(mgr, compress.NewManager(), log, true, ""))
 	t.Cleanup(srv.Close)
 	t.Cleanup(mgr.Close)
 
@@ -196,7 +196,7 @@ func TestWSCompressionNegotiation(t *testing.T) {
 func TestOpKickValidation(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	mgr := group.NewManager(log)
-	h := Handler(mgr, compress.NewManager(), log, true)
+	h := Handler(mgr, compress.NewManager(), log, true, "")
 
 	// GET 不允许
 	rec := httptest.NewRecorder()
@@ -214,7 +214,7 @@ func TestOpKickValidation(t *testing.T) {
 	}
 
 	// opEnabled=false 时 404
-	h2 := Handler(mgr, compress.NewManager(), log, false)
+	h2 := Handler(mgr, compress.NewManager(), log, false, "")
 	rec = httptest.NewRecorder()
 	h2.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/op/api/clients", nil))
 	if rec.Code != http.StatusNotFound {

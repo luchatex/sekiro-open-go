@@ -112,6 +112,15 @@ a { color: var(--accent); text-decoration: none; }
 </style>
 </head>
 <body>
+<div id="loginMask" hidden style="position:fixed;inset:0;background:rgba(15,23,42,.55);backdrop-filter:blur(2px);z-index:99;display:flex;align-items:center;justify-content:center;">
+  <form onsubmit="event.preventDefault();doLogin()" style="background:#fff;border-radius:12px;padding:28px 32px;box-shadow:0 12px 40px rgba(0,0,0,.25);width:320px;font:14px/1.6 system-ui,sans-serif;color:#1e293b;">
+    <div style="font-size:17px;font-weight:700;margin-bottom:4px;">SEKIRO OP</div>
+    <div style="color:#64748b;margin-bottom:14px;">监控路径已启用密码保护，请登录</div>
+    <input id="loginPwd" type="password" autofocus placeholder="访问密码" style="width:100%;box-sizing:border-box;padding:9px 11px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;outline:none;" />
+    <div id="loginMsg" style="color:#dc2626;min-height:20px;font-size:12.5px;margin-top:6px;"></div>
+    <button type="submit" style="width:100%;padding:9px 0;border:0;border-radius:8px;background:#2563eb;color:#fff;font-size:14px;font-weight:600;cursor:pointer;">登录</button>
+  </form>
+</div>
 <header>
   <h1><span class="dot" id="statusDot"></span>SEKIRO OP · 监控报表</h1>
   <span class="meta">uptime <b id="uptime">–</b></span>
@@ -235,10 +244,35 @@ let gran = "hourly";
 let expanded = new Set();
 let timer = null;
 
+// ---------- 登录（OpPassword 启用时，任一 API 返回 401 弹出遮罩） ----------
+function showLogin() {
+  $("loginMask").hidden = false;
+  if (timer) { clearInterval(timer); timer = null; } // 未登录不轮询，避免反复 401
+}
+async function doLogin() {
+  let res;
+  try {
+    res = await fetch("/op/api/login", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: $("loginPwd").value })
+    });
+  } catch (e) { $("loginMsg").textContent = "网络错误：" + e; return; }
+  if (res.status === 429) {
+    let d = {}; try { d = await res.json(); } catch (e) {}
+    $("loginMsg").textContent = "尝试次数过多已锁定，请 " + (d.retryAfterSeconds || 120) + " 秒后重试";
+    return;
+  }
+  if (!res.ok) { $("loginMsg").textContent = "密码错误（连续 3 次将锁定 2 分钟）"; return; }
+  $("loginMask").hidden = true;
+  $("loginMsg").textContent = ""; $("loginPwd").value = "";
+  startPolling(+$("interval").value);
+}
+
 // ---------- 数据拉取 ----------
 async function poll() {
   try {
     const res = await fetch("/op/api/stats", { cache: "no-store" });
+    if (res.status === 401) { showLogin(); return; }
     if (!res.ok) throw new Error(res.status);
     const d = await res.json();
     render(d);
@@ -452,6 +486,7 @@ const serverNowMs = () => Date.now() - serverSkewMs;
 async function pollNodes() {
   try {
     const res = await fetch("/op/api/clients", { cache: "no-store" });
+    if (res.status === 401) { showLogin(); return; }
     if (!res.ok) throw new Error(res.status);
     const d = await res.json();
     renderNodes(d.clients || []);
@@ -501,6 +536,7 @@ async function kickClient(group, id) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ group, clientId: id }),
     });
+    if (res.status === 401) { showLogin(); return; }
     const d = await res.json();
     if (!d.kicked) alert("该设备已不在线（可能刚断开）");
   } catch (e) {
@@ -522,6 +558,7 @@ const fmtAgoSec = (sec) => sec ? fmtAgo(new Date(sec * 1000).toISOString()) : "�
 async function pollErrors() {
   try {
     const res = await fetch("/op/api/errors");
+    if (res.status === 401) { showLogin(); return; }
     renderErrors(await res.json());
   } catch (e) { $("errMeta").textContent = "拉取失败"; }
 }

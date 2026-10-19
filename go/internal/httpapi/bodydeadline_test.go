@@ -66,7 +66,7 @@ func withBodyTimeout(t *testing.T, timeout time.Duration, providerDelay time.Dur
 		tr.cl = cl
 		g.Register(cl)
 	}
-	srv := httptest.NewServer(Handler(mgr, compress.NewManager(), log, false))
+	srv := httptest.NewServer(Handler(mgr, compress.NewManager(), log, false, ""))
 	t.Cleanup(srv.Close)
 	t.Cleanup(mgr.Close)
 	return srv

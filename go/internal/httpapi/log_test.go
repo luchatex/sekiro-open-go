@@ -63,7 +63,7 @@ func invokeRequest(t *testing.T, h *captureHandler, level slog.Level, query stri
 
 	log := slog.New(h)
 	mgr := group.NewManager(log)
-	hdl := Handler(mgr, compress.NewManager(), log, false)
+	hdl := Handler(mgr, compress.NewManager(), log, false, "")
 	req := httptest.NewRequest("GET", "/business/invoke?"+query, nil)
 	rec := httptest.NewRecorder()
 	hdl.ServeHTTP(rec, req)
@@ -109,7 +109,7 @@ func TestInvokeLogWithoutParams(t *testing.T) {
 	h := &captureHandler{level: slog.LevelInfo}
 	log := slog.New(h)
 	mgr := group.NewManager(log)
-	hdl := Handler(mgr, compress.NewManager(), log, false)
+	hdl := Handler(mgr, compress.NewManager(), log, false, "")
 	req := httptest.NewRequest("GET", "/business/invoke", nil)
 	hdl.ServeHTTP(httptest.NewRecorder(), req)
 	if out := h.joined(); !strings.Contains(out, "sekiro invoke request") {

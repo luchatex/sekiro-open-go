@@ -68,7 +68,7 @@ func New(cfg *config.Config) (*Server, error) {
 		sniffTimeout: defaultSniffTimeout,
 	}
 	s.httpSrv = &http.Server{
-		Handler:           httpapi.Handler(s.mgr, s.comp, log, !cfg.OpDisabled),
+		Handler:           httpapi.Handler(s.mgr, s.comp, log, !cfg.OpDisabled, cfg.OpPassword),
 		ReadHeaderTimeout: 30 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 		// 仅设空闲超时：把"连上不请求"的 keep-alive 连接收回来。

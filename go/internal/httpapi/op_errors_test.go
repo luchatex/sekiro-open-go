@@ -35,7 +35,7 @@ func fetchErrors(t *testing.T, h http.Handler) metrics.ErrorsJSON {
 func TestOpErrorsEndpoint(t *testing.T) {
 	metrics.Reset()
 	mgr := group.NewManager(slog.New(slog.NewTextHandler(io.Discard, nil)))
-	h := Handler(mgr, compress.NewManager(), slog.New(slog.NewTextHandler(io.Discard, nil)), true)
+	h := Handler(mgr, compress.NewManager(), slog.New(slog.NewTextHandler(io.Discard, nil)), true, "")
 	t.Cleanup(mgr.Close)
 
 	// 触发一次 dispatch-failed：空池 group（首次空池立即失败）
@@ -77,7 +77,7 @@ func TestOpErrorsEndpoint(t *testing.T) {
 	}
 
 	// op 关闭时端点 404
-	h2 := Handler(mgr, compress.NewManager(), slog.New(slog.NewTextHandler(io.Discard, nil)), false)
+	h2 := Handler(mgr, compress.NewManager(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, "")
 	rec := httptest.NewRecorder()
 	h2.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/op/api/errors", nil))
 	if rec.Code != http.StatusNotFound {

@@ -20,7 +20,7 @@ import (
 func TestStatsShowsRegisteredGroupWithoutTraffic(t *testing.T) {
 	metrics.Reset()
 	mgr := group.NewManager(slog.New(slog.NewTextHandler(io.Discard, nil)))
-	h := Handler(mgr, compress.NewManager(), slog.Default(), true)
+	h := Handler(mgr, compress.NewManager(), slog.Default(), true, "")
 
 	// 注册一个假 provider，不产生任何调用
 	g := mgr.GetOrCreate("fresh-group")

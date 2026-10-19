@@ -43,7 +43,7 @@ func TestNegotiateEncoding(t *testing.T) {
 
 // newTestHandler 构造带空 group 管理器的完整 Handler（监控页开启）。
 func newTestHandler() http.Handler {
-	return Handler(group.NewManager(nil), compress.NewManager(), nil, true)
+	return Handler(group.NewManager(nil), compress.NewManager(), nil, true, "")
 }
 
 func TestGzipGroupList(t *testing.T) {

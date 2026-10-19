@@ -49,7 +49,7 @@ func startSilentServer(t *testing.T, groupName string) (*group.Manager, string) 
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	srv := httptest.NewServer(Handler(mgr, compress.NewManager(), log, false))
+	srv := httptest.NewServer(Handler(mgr, compress.NewManager(), log, false, ""))
 	t.Cleanup(srv.Close)
 	t.Cleanup(mgr.Close)
 	return mgr, srv.Listener.Addr().String()
@@ -124,7 +124,7 @@ func TestInvokeNoWriteAfterDisconnect(t *testing.T) {
 	tr.cl = cl
 	g.Register(cl)
 
-	srv := httptest.NewServer(Handler(mgr, compress.NewManager(), log, false))
+	srv := httptest.NewServer(Handler(mgr, compress.NewManager(), log, false, ""))
 	defer srv.Close()
 	addr := srv.Listener.Addr().String()
 

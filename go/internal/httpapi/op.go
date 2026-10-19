@@ -3,7 +3,8 @@
 //   - GET /op           单文件监控页（HTML+CSS+原生 JS，embed 进二进制，无外部依赖）
 //   - GET /op/api/stats 指标快照 JSON（group/action 维度六指标 + 小时/天序列）
 //
-// 页面无鉴权（开源版与 /business API 一致）；公网部署建议前置网关做访问控制。
+// 默认无鉴权（开源版与 /business API 一致）；配置 OpPassword（-op-password /
+// SEKIRO_OP_PASSWORD）后启用登录会话保护，见 opsign.go。
 package httpapi
 
 import (
@@ -144,4 +145,14 @@ func handleOpStats(w http.ResponseWriter, mgr *group.Manager) {
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(http.StatusOK)
 	w.Write(body)
+}
+
+// isOpLoginPath POST /op/api/login：监控路径登录（OpPassword 启用时）。
+func isOpLoginPath(path string) bool {
+	return strings.EqualFold(path, "/op/api/login")
+}
+
+// isOpLogoutPath POST /op/api/logout：撤销当前监控会话。
+func isOpLogoutPath(path string) bool {
+	return strings.EqualFold(path, "/op/api/logout")
 }

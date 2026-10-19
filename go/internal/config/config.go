@@ -27,6 +27,9 @@ type Config struct {
 	TLSCertKey string
 	// TLSPort TLS 监听端口，默认 5613；TLSCert 为空时不启用
 	TLSPort int
+	// OpPassword /op 监控路径访问密码；空 = 不启用鉴权（向后兼容）。
+	// 启用后 /op 与 /op/api/* 需登录会话 Cookie；登录失败 3 次锁定来源 IP 2 分钟。
+	OpPassword string
 }
 
 func Load() *Config {
@@ -56,6 +59,9 @@ func Load() *Config {
 	if v := os.Getenv("SEKIRO_LOG_LEVEL"); v != "" {
 		c.LogLevel = v
 	}
+	if v := os.Getenv("SEKIRO_OP_PASSWORD"); v != "" {
+		c.OpPassword = v
+	}
 	flag.IntVar(&c.Port, "port", c.Port, "sekiro server listen port")
 	flag.BoolVar(&c.LocalDebug, "debug", c.LocalDebug, "local debug mode")
 	flag.StringVar(&c.LogLevel, "log-level", c.LogLevel, "log level: debug, info, warn or error (default info)")
@@ -63,6 +69,7 @@ func Load() *Config {
 	flag.StringVar(&c.TLSCert, "tls-cert", c.TLSCert, "TLS certificate file (enables wss listener)")
 	flag.StringVar(&c.TLSCertKey, "tls-key", c.TLSCertKey, "TLS private key file")
 	flag.IntVar(&c.TLSPort, "tls-port", c.TLSPort, "TLS listen port (wss)")
+	flag.StringVar(&c.OpPassword, "op-password", c.OpPassword, "password for /op monitor paths (empty = no auth)")
 	flag.Parse()
 	return c
 }

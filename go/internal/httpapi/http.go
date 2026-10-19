@@ -39,10 +39,31 @@ const (
 // Handler 返回 HTTP API 处理器。
 //
 // opEnabled 控制 /op 监控页面与 /op/api/stats 是否可用（config.OpDisabled）。
-func Handler(mgr *group.Manager, comp *compress.Manager, log *slog.Logger, opEnabled bool) http.Handler {
+// opPassword 非空时为 /op 路径族启用密码访问（登录会话 + 登录限流，
+// 见 opsign.go）。
+func Handler(mgr *group.Manager, comp *compress.Manager, log *slog.Logger, opEnabled bool, opPassword string) http.Handler {
+	var opGuard *opAuth
+	if opPassword != "" {
+		opGuard = newOpAuth(opPassword)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		if opEnabled {
+			if opGuard != nil {
+				switch {
+				case isOpLoginPath(path):
+					opGuard.handleOpLogin(w, r)
+					return
+				case isOpLogoutPath(path):
+					opGuard.handleOpLogout(w, r)
+					return
+				case isOpPath(path), isOpStatsPath(path), isOpClientsPath(path),
+					isOpKickPath(path), isOpErrorsPath(path):
+					if !opGuard.checkAuth(w, r) {
+						return
+					}
+				}
+			}
 			if isOpStatsPath(path) {
 				handleOpStats(w, mgr)
 				return

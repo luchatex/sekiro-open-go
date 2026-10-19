@@ -45,7 +45,12 @@ http://127.0.0.1:5612/op
 - **实现**：`internal/metrics` 内存统计（小时桶保留 48h、天精度由小时桶按本地时区聚合），
   进程重启清零、无持久化；埋点覆盖 HTTP 与二进制 invoker 两条消费通道
 - **开关**：`-op-disable` 或环境变量 `SEKIRO_OP_DISABLE=true` 关闭页面与 API
-  （页面与 `/business` API 一致无鉴权，公网部署建议前置网关做访问控制）
+- **密码保护**（v1.1.0+）：`-op-password` 或环境变量 `SEKIRO_OP_PASSWORD` 启用
+  `/op` 与 `/op/api/*` 的登录访问——浏览器打开后弹出密码框，登录成功下发
+  12h 会话 Cookie；**连续输错 3 次锁定来源 IP 2 分钟**（期内直接 429）。
+  docker compose 在宿主机 `.env` 定义 `OP_PASSWORD` 即生效；未配置密码 =
+  与 `/business` API 一致无鉴权，公网部署建议启用或前置网关访问控制
+- **curl 脚本访问**（启用密码时）：先 `curl -c cookie.txt -X POST -d '{"password":"xxx"}' .../op/api/login`，再 `curl -b cookie.txt .../op/api/stats`
 
 ## Docker 部署
 

@@ -19,7 +19,7 @@ import (
 
 func newOpTestHandler() http.Handler {
 	metrics.Reset()
-	return Handler(group.NewManager(slog.Default()), compress.NewManager(), slog.Default(), true)
+	return Handler(group.NewManager(slog.Default()), compress.NewManager(), slog.Default(), true, "")
 }
 
 func TestOpPage(t *testing.T) {
@@ -58,7 +58,7 @@ func TestOpStatsEmpty(t *testing.T) {
 
 func TestOpDisabled(t *testing.T) {
 	metrics.Reset()
-	h := Handler(group.NewManager(slog.Default()), compress.NewManager(), slog.Default(), false)
+	h := Handler(group.NewManager(slog.Default()), compress.NewManager(), slog.Default(), false, "")
 	for _, p := range []string{"/op", "/op/api/stats"} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
@@ -176,7 +176,7 @@ func findGroup(t *testing.T, s statsJSON, name string) int {
 func TestOpStatsEndToEnd(t *testing.T) {
 	metrics.Reset()
 	mgr := group.NewManager(slog.Default())
-	h := Handler(mgr, compress.NewManager(), slog.Default(), true)
+	h := Handler(mgr, compress.NewManager(), slog.Default(), true, "")
 	registerEchoClient(t, mgr, "demo-group", "c1", 0)
 
 	// 成功调用
@@ -207,7 +207,7 @@ func TestOpStatsEndToEnd(t *testing.T) {
 func TestOpStatsFailAndSysErr(t *testing.T) {
 	metrics.Reset()
 	mgr := group.NewManager(slog.Default())
-	h := Handler(mgr, compress.NewManager(), slog.Default(), true)
+	h := Handler(mgr, compress.NewManager(), slog.Default(), true, "")
 	registerEchoClient(t, mgr, "g-fail", "c1", -1) // provider 返回失败
 
 	// provider 业务失败（status=-1 → Fail）
