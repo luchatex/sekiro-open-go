@@ -38,8 +38,59 @@ include /etc/nginx/conf.d/nginx-sekiro.conf;
 # 证书路径按实际调整；/op 段含 IP 白名单与 Basic Auth 示例（默认注释）
 ```
 
-关键点：`proxy_http_version 1.1` + `Upgrade/Connection` 头透传 +
-`proxy_read_timeout` 调大（WS 长连接，默认 60s 会掐空闲连接）。
+配置包含两段必须保留的内容：
+
+1. **upstream 连接池**：nginx → sekiro 复用 HTTP/1.1 长连接，减少后端侧
+   `TIME_WAIT` 与短连接握手开销。
+
+```nginx
+upstream sekiro_backend {
+    server 127.0.0.1:5612;
+    keepalive 64;              # 每个 worker 的空闲连接数，不是全局总数
+    keepalive_requests 1000;   # 单连接最多复用多少次
+    keepalive_timeout 60s;     # 空闲连接在池中的保留时间
+}
+```
+
+2. **按 Upgrade 头条件设置 Connection**：普通 HTTP 必须发送空的
+   `Connection` 头，keepalive 才会生效；WebSocket 握手仍需要
+   `Connection: upgrade`。不能对所有请求固定写 `Connection "upgrade"`。
+
+```nginx
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      '';
+}
+
+proxy_http_version 1.1;
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection $connection_upgrade;
+```
+
+关键点：
+
+- `proxy_pass` 必须指向 upstream 名称（`http://sekiro_backend`）；直接写
+  `http://127.0.0.1:5612` 会绕过连接池。
+- `/op` 是普通 HTTP，使用 `proxy_http_version 1.1` +
+  `proxy_set_header Connection ""`，不需要 Upgrade 头。
+- `keepalive` 按 worker 分别计算；4 个 worker 配 64，理论最多保留
+  256 条空闲连接。按 QPS 和后端连接数在 32–128 间调整即可。
+- `proxy_socket_keepalive on` 启用 TCP keepalive，用来发现被防火墙或
+  后端静默丢弃的死连接，与 HTTP 连接池不是同一概念。
+- 这里减少的是 **nginx → sekiro** 的 `TIME_WAIT`。如果 `TIME_WAIT`
+  大量出现在客户端 → nginx，需要让 HTTP 调用方使用连接池，并检查
+  客户端是否发送了 `Connection: close`。
+- 修改后先执行 `nginx -t`，再 `nginx -s reload`。
+
+核对连接是否真正复用：
+
+```bash
+# 观察 nginx worker 与 5612 之间的 ESTABLISHED 数
+ss -tanp '( sport = :5612 )' | grep -c ESTAB
+
+# TIME_WAIT 应随连接池生效而下降，而不是立刻归零
+ss -tan state time-wait '( dport = :5612 )' | wc -l
+```
 
 ## Cloudflare Tunnel（零证书、零公网 IP）
 
