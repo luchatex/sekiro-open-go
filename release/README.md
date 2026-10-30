@@ -6,7 +6,7 @@
 不再本地手工出包。
 
 ```bash
-git tag v1.0.1 && git push origin v1.0.1   # 自动构建并发布
+git tag v1.0.2 && git push origin v1.0.2   # 自动构建并发布
 ```
 
 本地构建（调试/自用，非发布途径）：
@@ -19,6 +19,20 @@ GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o sekiro ./cmd/se
 ```
 
 部署与自检方法见 [deploy/](../deploy/) 与 [go/README.md](../go/README.md)。
+
+## v1.0.2（2026-10-30）
+
+发布镜像：`ghcr.io/luchatex/sekiro-open-go:1.0.2`（同时生成 `1.0`）。
+在 v1.0.1 基础上的稳定性修复：
+
+- 修复二进制 invoker 响应被原地压缩后，指标把压缩字节误记为逻辑出流量、
+  并可能误判 `status` 的问题。
+- 修复 gzip 流式解压上限与运行时限额判据不一致的问题，超限始终返回错误，
+  不再出现 `(nil, nil)`。
+- OP 登录成功也触发过期会话清理；`/op/api/logout` 限定 POST。
+- native 写路径改为 defer 解锁，避免异常时永久持有写锁。
+- 默认 metrics 实例改为原子替换；修复 Go CI `-race` 发现的测试同步问题，
+  并消除 `/op` 指标测试的异步时序抖动。
 
 ## v1.0.1（2026-10-30）
 

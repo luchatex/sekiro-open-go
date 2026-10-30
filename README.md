@@ -85,7 +85,7 @@ docker run -d --name sekiro -p 5612:5612 --restart unless-stopped \
   --log-driver=json-file --log-opt max-size=50m --log-opt max-file=3 \
   -e GOMEMLIMIT=3GiB -e GOGC=100 \
   -e SEKIRO_OP_PASSWORD='监控密码' \
-  ghcr.io/luchatex/sekiro-open-go:1.0.1
+  ghcr.io/luchatex/sekiro-open-go:1.0.2
 
 # 方式三：本地构建镜像
 docker compose up -d --build    # 编排在仓库根目录，多阶段构建，alpine 约 15MB

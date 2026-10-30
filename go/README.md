@@ -62,7 +62,7 @@ docker run -d --name sekiro -p 5612:5612 --restart unless-stopped \
   --memory=4g --memory-swap=4g \
   --log-driver=json-file --log-opt max-size=50m --log-opt max-file=3 \
   -e GOMEMLIMIT=3GiB -e GOGC=100 \
-  ghcr.io/luchatex/sekiro-open-go:1.0.1
+  ghcr.io/luchatex/sekiro-open-go:1.0.2
 
 # 方式一：docker compose（推荐，编排文件在仓库根目录，已内置资源限制与日志轮转）
 docker compose up -d --build
