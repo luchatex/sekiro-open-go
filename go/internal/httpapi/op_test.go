@@ -261,16 +261,25 @@ func TestOpStatsWireBytesCompressed(t *testing.T) {
 		t.Fatalf("response not compressed: %d bytes", rec.Body.Len())
 	}
 
-	s := fetchStats(t, h)
-	g := s.Groups[findGroup(t, s, "g-wire")]
-	if g.Metrics.OutKB <= 0 {
-		t.Fatalf("bytesOutKB = %v, want > 0", g.Metrics.OutKB)
+	// 响应关闭与 finishMetric 不是同一个 happens-before 边：HTTP handler
+	// 先被 Closed 放行，指标随后由 provider 响应协程写入。轮询等待终态，
+	// 避免慢 CI（尤其 -race）在指标落库前读到 0。
+	var outKB, wireKB float64
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s := fetchStats(t, h)
+		g := s.Groups[findGroup(t, s, "g-wire")]
+		outKB, wireKB = g.Metrics.OutKB, g.Metrics.WireKB
+		if outKB > 0 && wireKB > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("metrics not finalized: bytesOutKB=%v bytesOutWireKB=%v", outKB, wireKB)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	if g.Metrics.WireKB <= 0 {
-		t.Fatalf("bytesOutWireKB = %v, want > 0 (gzip negotiated)", g.Metrics.WireKB)
-	}
-	if g.Metrics.WireKB >= g.Metrics.OutKB {
-		t.Fatalf("wire %v should be < logical %v", g.Metrics.WireKB, g.Metrics.OutKB)
+	if wireKB >= outKB {
+		t.Fatalf("wire %v should be < logical %v", wireKB, outKB)
 	}
 }
 
