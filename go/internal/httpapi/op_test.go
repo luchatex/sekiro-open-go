@@ -88,6 +88,7 @@ func fastJSONEnvelope(status int32, msg, data string) []byte {
 type echoTransport struct {
 	cli    *group.Client
 	status int32 // 0=成功；非 0 模拟 provider 业务失败
+	pad    int   // >0 时响应体填充指定字节，用于压缩出站统计测试
 }
 
 func (e *echoTransport) SendInvoke(_ *orderedjson.Map, seq int32) error {
@@ -96,6 +97,9 @@ func (e *echoTransport) SendInvoke(_ *orderedjson.Map, seq int32) error {
 		pkt.Seq = seq
 		pkt.AddHeader(protocol.PayloadContentType, protocol.ContentTypeSekiroFastJson)
 		data := `{"echo":"ok"}`
+		if e.pad > 0 {
+			data = `{"echo":"ok","pad":"` + strings.Repeat("A", e.pad) + `"}`
+		}
 		if e.status != 0 {
 			data = `{"err":"mock"}`
 		}
@@ -112,10 +116,13 @@ func (e *echoTransport) Active() bool             { return true }
 func (e *echoTransport) Close()                   {}
 func (e *echoTransport) CloseAfter(time.Duration) {}
 
-func registerEchoClient(t *testing.T, mgr *group.Manager, gName, cID string, status int32) *group.Client {
+func registerEchoClient(t *testing.T, mgr *group.Manager, gName, cID string, status int32, pad ...int) *group.Client {
 	t.Helper()
 	g := mgr.GetOrCreate(gName)
 	tr := &echoTransport{status: status}
+	if len(pad) > 0 {
+		tr.pad = pad[0]
+	}
 	cli := group.NewClient(tr, g, cID, slog.Default())
 	tr.cli = cli
 	g.Register(cli)
@@ -236,7 +243,7 @@ func TestOpStatsWireBytesCompressed(t *testing.T) {
 	metrics.Reset()
 	mgr := group.NewManager(slog.Default())
 	h := Handler(mgr, compress.NewManager(), slog.Default(), true, "")
-	registerEchoClient(t, mgr, "g-wire", "c1", 0)
+	registerEchoClient(t, mgr, "g-wire", "c1", 0, 200000)
 
 	big := strings.Repeat("A", 200000) // 高可压内容
 	req := httptest.NewRequest(http.MethodGet,

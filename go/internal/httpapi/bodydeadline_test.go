@@ -186,6 +186,44 @@ func TestBodyReadTimeoutClearedAfterRead(t *testing.T) {
 
 // TestSlowButLegitimateBodyAllowed 验证「慢但不挂死」的 body 仍被接受：
 // 在超时窗口内分批发送 body（约 10KB/s），应正常完成。
+// TestOpLoginBodyReadTimeout OP 登录读 body 也必须受 deadline 保护，
+// 不能发完首部后永久占用 goroutine/fd。
+func TestOpLoginBodyReadTimeout(t *testing.T) {
+	old := bodyReadTimeout
+	bodyReadTimeout = 800 * time.Millisecond
+	t.Cleanup(func() { bodyReadTimeout = old })
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := httptest.NewServer(Handler(group.NewManager(log), compress.NewManager(), log, true, "secret"))
+	t.Cleanup(srv.Close)
+
+	conn, err := net.Dial("tcp", srvAddr(srv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	hdr := "POST /op/api/login HTTP/1.1\r\nHost: x\r\n" +
+		"Content-Type: application/json\r\nContent-Length: 100\r\n\r\n"
+	if _, err := conn.Write([]byte(hdr)); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("OP 登录 body 读取未及时结束: %v", err)
+	}
+	defer resp.Body.Close()
+	elapsed := time.Since(start)
+	if elapsed > 3*time.Second {
+		t.Fatalf("OP 登录 body 超时保护未生效，耗时 %v", elapsed)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("状态码 = %d, want 400", resp.StatusCode)
+	}
+	t.Logf("OP-BODY-TIMEOUT: %v 后返回 400", elapsed.Round(time.Millisecond))
+}
+
 func TestSlowButLegitimateBodyAllowed(t *testing.T) {
 	srv := withBodyTimeout(t, 3*time.Second, 50*time.Millisecond)
 	addr := srvAddr(srv)

@@ -267,16 +267,43 @@ var bodyReadTimeout = 60 * time.Second
 //
 // 读完立即清除 deadline：其后的响应期是 15s+ 长轮询，必须无读限制。
 func readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	return readBodyLimited(w, r, maxBodyBytes)
+}
+
+// readBodyLimited 与 readBody 相同，但限制更小的业务 body（如 OP 登录/踢人）。
+func readBodyLimited(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, error) {
 	rc := http.NewResponseController(w)
 	if err := rc.SetReadDeadline(time.Now().Add(bodyReadTimeout)); err != nil {
-		// 不支持 deadline 的 ResponseWriter（如测试用httptest 包装）
+		// 不支持 deadline 的 ResponseWriter（如测试用 httptest 包装）
 		// 不应导致请求失败，降级为无超时读取。
-		return io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+		body, rerr := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+		if rerr != nil {
+			r.Close = true
+		}
+		return body, rerr
 	}
-	// defer 而非读后立即清除：MaxBytesReader 之外的任何提前返回
-	// （含 panic）都不应把 deadline 泄漏给后续长轮询。
-	defer rc.SetReadDeadline(time.Time{})
-	return io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+	if err != nil {
+		// 读失败/超时后保留过去的 deadline 并禁止连接复用：
+		// 否则 net/http 在收尾时尝试排空未读 body，会再次永久阻塞。
+		r.Close = true
+		return body, err
+	}
+	// 仅在完整读成功后清除 deadline，避免泄漏到后续长轮询。
+	_ = rc.SetReadDeadline(time.Time{})
+	return body, nil
+}
+
+// requireJSONContentType 写操作只接受 application/json。
+// 浏览器跨站 form/text/plain 无法伪造该类型而触发预检；与 SameSite
+// Cookie 一起阻断 CSRF。返回 false 时已写 415。
+func requireJSONContentType(w http.ResponseWriter, r *http.Request) bool {
+	ct := strings.ToLower(strings.TrimSpace(strings.SplitN(r.Header.Get("Content-Type"), ";", 2)[0]))
+	if ct != contentTypeJSON {
+		httpResponseText(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+		return false
+	}
+	return true
 }
 
 // buildParams 查询参数在前、body 覆盖在后（对齐 buildRequestJson：POST body
@@ -463,7 +490,18 @@ func (s *httpSink) setWriteDeadline() func() {
 	return func() { _ = rc.SetWriteDeadline(time.Time{}) }
 }
 
-func (s *httpSink) finish() { s.once.Do(func() { close(s.closed) }) }
+func (s *httpSink) finish() {
+	s.once.Do(func() {
+		// 先结束压缩流再发终止信号：gzip trailer 也属于实际出站字节，
+		// 若等 handler defer 才 Close，finishMetric 会系统性少计最后一段。
+		if s.cw != nil {
+			clearWrite := s.setWriteDeadline()
+			s.cw.Close()
+			clearWrite()
+		}
+		close(s.closed)
+	})
+}
 
 // cancel 封口并等待已持有 s.mu 的在途写完成。返回后不会再有任何响应写入。
 func (s *httpSink) cancel() {

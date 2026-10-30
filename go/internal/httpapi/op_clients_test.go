@@ -207,10 +207,22 @@ func TestOpKickValidation(t *testing.T) {
 
 	// 缺参数
 	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/op/api/clients/kick",
-		bytes.NewReader([]byte(`{}`))))
+	req := httptest.NewRequest(http.MethodPost, "/op/api/clients/kick",
+		bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("empty body kick = %d, want 400", rec.Code)
+	}
+
+	// 非 JSON Content-Type：拒绝简单跨站表单，返回 415
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/op/api/clients/kick",
+		bytes.NewReader([]byte(`{"group":"g","clientId":"c"}`)))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("form kick = %d, want 415", rec.Code)
 	}
 
 	// opEnabled=false 时 404

@@ -121,14 +121,11 @@ func (Gzip) Decompress(data []byte) ([]byte, error) {
 	//
 	// mod 2^32 回绕无害：真实值 ≥4GB 时 ISIZE 回绕后仍远大于上限，照样被拒；
 	// 回绕到上限以下的极端情形由下面的流式检查兜底。
-	hint := 0
+	// ISIZE 只能用于「拒绝」，不能用于预分配——它可被伪造。
 	if n := len(data); n >= 4 {
 		isize := int64(binary.LittleEndian.Uint32(data[n-4:]))
 		if isize > MaxDecompressedBytes {
 			return nil, tooLargeErr("gzip", len(data), MaxDecompressedBytes)
-		}
-		if isize > 0 {
-			hint = int(isize) // 合规值用作容量提示，避免倍增扩容
 		}
 	}
 
@@ -138,7 +135,7 @@ func (Gzip) Decompress(data []byte) ([]byte, error) {
 	}
 	defer r.Close()
 	// 第二道：流式兜底。ISIZE 可伪造（且可回绕），真实解压量仍须逐块校验。
-	out, n, err := readChunked(r, hint)
+	out, n, err := readChunked(r)
 	if err != nil {
 		return nil, err
 	}
@@ -155,16 +152,11 @@ const decompressChunk = 64 << 10
 //  1. 检查单流上限（超过立即返回，已读内存随函数退出被 GC 回收）
 //  2. 向全局预算预占（CAS 循环），超预算立即返回
 //
-// capHint >0 时按该值预分配（正常路径零扩容）。
-// 返回解压结果与总字节数。
-func readChunked(r io.Reader, capHint int) ([]byte, int64, error) {
-	// 首块保守分配：未拿到可信提示时按实际到达量增长，
-	// 绝不按压缩帧声明长度预分配
-	initial := decompressChunk
-	if capHint > initial {
-		initial = capHint
-	}
-	buf := make([]byte, 0, initial)
+// 首块固定按 decompressChunk 预分配，绝不使用 gzip ISIZE 作为 capHint：
+// ISIZE 来自不可信输入，伪造“ISIZE=128MB、实际只有几字节”即可在预算
+// 占位前制造巨额分配。合法大响应依靠 append 倍增扩容，开销可接受。
+func readChunked(r io.Reader) ([]byte, int64, error) {
+	buf := make([]byte, 0, decompressChunk)
 	chunk := make([]byte, decompressChunk)
 	var reserved int64
 	defer func() { releaseDecompress(reserved) }()

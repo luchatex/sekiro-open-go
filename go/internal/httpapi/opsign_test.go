@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -27,10 +28,16 @@ func loginBody(pwd string) *bytes.Reader {
 	return bytes.NewReader(b)
 }
 
+func loginRequest(pwd string) *http.Request {
+	r := httptest.NewRequest("POST", "/op/api/login", loginBody(pwd))
+	r.Header.Set("Content-Type", "application/json")
+	return r
+}
+
 // TestOpLoginSuccessAndSession 登录成功 → 会话 Cookie 有效 → checkAuth 放行。
 func TestOpLoginSuccessAndSession(t *testing.T) {
 	a := newTestAuth(t)
-	r := httptest.NewRequest("POST", "/op/api/login", loginBody("secret"))
+	r := loginRequest("secret")
 	w := httptest.NewRecorder()
 	a.handleOpLogin(w, r)
 	if w.Code != 200 {
@@ -60,11 +67,23 @@ func TestOpLoginSuccessAndSession(t *testing.T) {
 	}
 }
 
+// TestOpLoginRequiresJSON 登录写操作拒绝简单跨站表单类型。
+func TestOpLoginRequiresJSON(t *testing.T) {
+	a := newTestAuth(t)
+	r := httptest.NewRequest("POST", "/op/api/login", loginBody("secret"))
+	r.Header.Set("Content-Type", "text/plain")
+	w := httptest.NewRecorder()
+	a.handleOpLogin(w, r)
+	if w.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("text/plain login = %d, want 415", w.Code)
+	}
+}
+
 // TestOpLoginWrongPasswordAndLock 连续 3 次失败锁定 → 429 → 期满恢复。
 func TestOpLoginWrongPasswordAndLock(t *testing.T) {
 	a := newTestAuth(t)
 	for i := 1; i <= 3; i++ {
-		r := httptest.NewRequest("POST", "/op/api/login", loginBody("wrong"))
+		r := loginRequest("wrong")
 		w := httptest.NewRecorder()
 		a.handleOpLogin(w, r)
 		want := 401
@@ -76,7 +95,7 @@ func TestOpLoginWrongPasswordAndLock(t *testing.T) {
 		}
 	}
 	// 锁定期内：即使密码正确也 429（不比对密码）
-	r := httptest.NewRequest("POST", "/op/api/login", loginBody("secret"))
+	r := loginRequest("secret")
 	w := httptest.NewRecorder()
 	a.handleOpLogin(w, r)
 	if w.Code != 429 {
@@ -104,7 +123,7 @@ func TestOpLockExpiry(t *testing.T) {
 	if d := a.lockedRemaining(ip); d != 0 {
 		t.Fatalf("lock should be expired, got %v", d)
 	}
-	r := httptest.NewRequest("POST", "/op/api/login", loginBody("secret"))
+	r := loginRequest("secret")
 	w := httptest.NewRecorder()
 	a.handleOpLogin(w, r)
 	if w.Code != 200 {
@@ -112,20 +131,42 @@ func TestOpLockExpiry(t *testing.T) {
 	}
 }
 
-// TestOpClientIPPriority X-Real-IP > XFF 首项 > RemoteAddr。
-func TestOpClientIPPriority(t *testing.T) {
+// TestOpClientIPTrustedProxy 只有可信代理来源才读取转发头；
+// XFF 取最右侧（nginx 追加的真实 peer），公网直连忽略伪造头。
+func TestOpClientIPTrustedProxy(t *testing.T) {
 	r := httptest.NewRequest("POST", "/op/api/login", nil)
 	r.RemoteAddr = "10.0.0.1:1234"
 	if got := opClientIP(r); got != "10.0.0.1" {
 		t.Fatalf("remoteaddr fallback: %s", got)
 	}
 	r.Header.Set("X-Forwarded-For", "8.8.8.8, 10.0.0.9")
-	if got := opClientIP(r); got != "8.8.8.8" {
-		t.Fatalf("xff first: %s", got)
+	if got := opClientIP(r); got != "10.0.0.9" {
+		t.Fatalf("xff rightmost: %s", got)
 	}
 	r.Header.Set("X-Real-IP", "9.9.9.9")
 	if got := opClientIP(r); got != "9.9.9.9" {
 		t.Fatalf("x-real-ip priority: %s", got)
+	}
+	r.Header.Set("X-Real-IP", "not-an-ip")
+	if got := opClientIP(r); got != "10.0.0.9" {
+		t.Fatalf("invalid x-real-ip fallback: %s", got)
+	}
+
+	// 公网直连：伪造 X-Real-IP/XFF 必须全部忽略。
+	r.RemoteAddr = "203.0.113.7:4567"
+	r.Header.Set("X-Real-IP", "1.1.1.1")
+	r.Header.Set("X-Forwarded-For", "2.2.2.2")
+	if got := opClientIP(r); got != "203.0.113.7" {
+		t.Fatalf("untrusted direct client spoofed IP: %s", got)
+	}
+}
+
+// TestSecureCookieDirectTLS 直连 TLS 无 X-Forwarded-Proto 时也必须加 Secure。
+func TestSecureCookieDirectTLS(t *testing.T) {
+	r := httptest.NewRequest("POST", "/op/api/login", nil)
+	r.TLS = &tls.ConnectionState{}
+	if !secureCookie(r) {
+		t.Fatal("direct TLS cookie must be Secure")
 	}
 }
 

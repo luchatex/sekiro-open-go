@@ -2,6 +2,7 @@ package compress
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"runtime"
 	"strings"
@@ -77,6 +78,33 @@ func TestGzipBombMemoryBounded(t *testing.T) {
 	}
 }
 
+// TestGzipForgedISizeDoesNotPreallocate 伪造一个合法上限内的 ISIZE，
+// 不能据此预分配 128MB。旧实现用 ISIZE 作 capHint，单请求在预算占位前
+// 就能制造 128MB 分配；现在首块固定 64KB，靠 append 增长。
+func TestGzipForgedISizeDoesNotPreallocate(t *testing.T) {
+	raw := bytes.Repeat([]byte("A"), 1<<20)
+	enc, err := Gzip{}.Compress(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// trailer = CRC32(4) + ISIZE(4)，只篡改 ISIZE，保留格式可解析。
+	binary.LittleEndian.PutUint32(enc[len(enc)-4:], uint32(MaxDecompressedBytes))
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	if _, err := (Gzip{}).Decompress(enc); err == nil {
+		t.Fatal("伪造 ISIZE 应触发 gzip 完整性错误")
+	}
+	runtime.ReadMemStats(&after)
+
+	delta := after.TotalAlloc - before.TotalAlloc
+	t.Logf("伪造 ISIZE=%d，解压尝试累计分配 %.2f MB", MaxDecompressedBytes, float64(delta)/(1<<20))
+	if delta >= 32<<20 {
+		t.Fatalf("伪造 ISIZE 造成 %d MB 分配，疑似仍按不可信长度预分配", delta>>20)
+	}
+}
+
 // TestReadChunkedStopsAtLimit 精确验证「读取量有界」这一核心不变式。
 //
 // 不用 HeapAlloc 采样做断言（受 GC 时机影响，并发下噪声可达 2 倍）：
@@ -91,7 +119,7 @@ func TestReadChunkedStopsAtLimit(t *testing.T) {
 	}()
 
 	src := &countingRepeatReader{chunk: make([]byte, 64<<10)}
-	_, n, err := readChunked(src, 0)
+	_, n, err := readChunked(src)
 	if err != nil {
 		t.Fatalf("readChunked: %v", err)
 	}
@@ -122,7 +150,7 @@ func TestReadChunkedBudgetBlocksEarly(t *testing.T) {
 	inFlight.Store(0)
 
 	src := &countingRepeatReader{chunk: make([]byte, 64<<10)}
-	_, n, err := readChunked(src, 0)
+	_, n, err := readChunked(src)
 	if err == nil {
 		t.Fatal("expected ErrNoBudget")
 	}

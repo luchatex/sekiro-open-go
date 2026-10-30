@@ -39,7 +39,15 @@ func (l *connListener) Feed(c net.Conn) {
 func (l *connListener) Accept() (net.Conn, error) {
 	select {
 	case c := <-l.ch:
-		return c, nil
+		// 与 Close 竞争：连接可能已被移出队列，但 done 同时关闭。
+		// 此时必须关闭并返回 ErrClosed，不能让关停后仍启动新连接。
+		select {
+		case <-l.done:
+			c.Close()
+			return nil, net.ErrClosed
+		default:
+			return c, nil
+		}
 	case <-l.done:
 		return nil, net.ErrClosed
 	}

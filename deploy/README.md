@@ -75,6 +75,9 @@ proxy_set_header Connection $connection_upgrade;
   `proxy_set_header Connection ""`，不需要 Upgrade 头。
 - `keepalive` 按 worker 分别计算；4 个 worker 配 64，理论最多保留
   256 条空闲连接。按 QPS 和后端连接数在 32–128 间调整即可。
+- `/op` 登录锁定只在直连来源为回环/私网/链路本地地址时信任
+  `X-Real-IP`/`X-Forwarded-For`；本配置的 nginx 与 sekiro 同机或同私网，
+  并覆写 `X-Real-IP $remote_addr`，可正确按真实客户端 IP 限流。
 - `proxy_socket_keepalive on` 启用 TCP keepalive，用来发现被防火墙或
   后端静默丢弃的死连接，与 HTTP 连接池不是同一概念。
 - 这里减少的是 **nginx → sekiro** 的 `TIME_WAIT`。如果 `TIME_WAIT`

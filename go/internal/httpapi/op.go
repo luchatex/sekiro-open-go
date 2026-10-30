@@ -10,7 +10,6 @@ package httpapi
 import (
 	"embed"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -99,7 +98,10 @@ func handleOpKick(w http.ResponseWriter, r *http.Request, mgr *group.Manager, lo
 		httpResponseText(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<10))
+	if !requireJSONContentType(w, r) {
+		return
+	}
+	body, err := readBodyLimited(w, r, 4<<10)
 	if err != nil {
 		httpResponseText(w, http.StatusBadRequest, "read body failed")
 		return
@@ -125,6 +127,7 @@ func handleOpKick(w http.ResponseWriter, r *http.Request, mgr *group.Manager, lo
 	}
 	body2, _ := json.Marshal(map[string]any{"kicked": ok})
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Length", strconv.Itoa(len(body2)))
 	w.WriteHeader(http.StatusOK)
 	w.Write(body2)

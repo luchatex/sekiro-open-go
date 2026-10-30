@@ -5,8 +5,9 @@
 //     https 反代下加 Secure），12h 滑动过期，内存态、重启失效
 //   - 防爆破：每 IP 连续失败 3 次 → 锁定 2 分钟（期内 429 + Retry-After，
 //     不比对密码）；成功登录清零；锁定期满计数清零重来
-//   - IP 获取：X-Real-IP → X-Forwarded-For 首项 → RemoteAddr
-//     （部署在可信内网 nginx 后，XFF 不做伪造防护）
+//   - IP 获取：仅当 RemoteAddr 是回环/私网/链路本地代理时，才信任
+//     X-Real-IP（nginx 覆写）或 XFF 最右侧项；公网直连一律用 RemoteAddr，
+//     防止伪造头绕过登录锁定或锁死他人
 //   - 密码比较 subtle.ConstantTimeCompare（防时序侧信道）
 //   - 限流表每 10 分钟清理 30 分钟无活动条目（防 map 无限增长）
 package httpapi
@@ -16,7 +17,6 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
-	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -62,22 +62,46 @@ func newOpAuth(password string) *opAuth {
 
 // ---- IP 提取 ----
 
-// opClientIP 反代场景取真实来源 IP：X-Real-IP → XFF 首项 → RemoteAddr。
-// 可信边界：部署在内网 nginx 后（nginx-sekiro.conf 已配 X-Real-IP），
-// 不防御伪造 XFF——伪造者只能锁自己无法锁他人（多值时取首项）。
+// opClientIP 取真实来源 IP。
+//
+// 只有直连方是回环/私网/链路本地地址（即部署在可信反代后）才读取转发头；
+// 公网客户端伪造 X-Real-IP/XFF 时一律忽略，避免绕过登录锁定或利用伪造
+// IP 锁死其他来源。XFF 取最右侧有效项：nginx 的 $proxy_add_x_forwarded_for
+// 会把自己看到的真实 peer 追加在末尾，左侧可由客户端任意伪造。
 func opClientIP(r *http.Request) string {
-	if v := strings.TrimSpace(r.Header.Get("X-Real-IP")); v != "" {
+	remote := remoteHost(r.RemoteAddr)
+	ip := net.ParseIP(remote)
+	if ip == nil || !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
+		return remote
+	}
+	if v := validForwardedIP(r.Header.Get("X-Real-IP")); v != "" {
 		return v
 	}
 	if v := r.Header.Get("X-Forwarded-For"); v != "" {
-		if first := strings.TrimSpace(strings.SplitN(v, ",", 2)[0]); first != "" {
-			return first
+		parts := strings.Split(v, ",")
+		for i := len(parts) - 1; i >= 0; i-- {
+			if candidate := validForwardedIP(parts[i]); candidate != "" {
+				return candidate
+			}
 		}
 	}
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
+	return remote
+}
+
+func remoteHost(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
 	}
-	return r.RemoteAddr
+	return strings.Trim(strings.TrimSpace(host), "[]")
+}
+
+func validForwardedIP(raw string) string {
+	ip := net.ParseIP(strings.Trim(strings.TrimSpace(raw), "[]"))
+	if ip == nil {
+		return ""
+	}
+	return ip.String()
 }
 
 // ---- 限流 ----
@@ -181,9 +205,11 @@ func (a *opAuth) validSession(token string) bool {
 // cookieName 监控会话 Cookie 名。
 const cookieName = "sekiro_op_session"
 
-// secureCookie https 反代下为 Cookie 加 Secure。
+// secureCookie 直接 TLS 或 https 反代下为 Cookie 加 Secure。
 func secureCookie(r *http.Request) bool {
-	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	return r.TLS != nil ||
+		strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") ||
+		strings.EqualFold(r.URL.Scheme, "https")
 }
 
 // checkAuth /op 请求鉴权闸门：已登录放行；未登录 401。
@@ -207,6 +233,9 @@ func (a *opAuth) handleOpLogin(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if !requireJSONContentType(w, r) {
+		return
+	}
 	ip := opClientIP(r)
 	if d := a.lockedRemaining(ip); d > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
@@ -219,13 +248,13 @@ func (a *opAuth) handleOpLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Password string `json:"password"`
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<10))
+	body, err := readBodyLimited(w, r, 4<<10)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
+		httpResponseText(w, http.StatusBadRequest, "read body failed")
 		return
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
+		httpResponseText(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
 
@@ -255,6 +284,7 @@ func (a *opAuth) handleOpLogin(w http.ResponseWriter, r *http.Request) {
 		Secure:   secureCookie(r),
 	})
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	w.Write([]byte(`{"ok":true}`))
 }
 

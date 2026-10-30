@@ -170,6 +170,7 @@ func (s *Server) Run(ctx context.Context) error {
 	if s.cfg.TLSCert != "" && s.cfg.TLSCertKey != "" {
 		cert, cerr := tls.LoadX509KeyPair(s.cfg.TLSCert, s.cfg.TLSCertKey)
 		if cerr != nil {
+			s.Close() // Run 启动失败：回收已启动的明文监听/HTTP server/group actor
 			return cerr
 		}
 		// CurvePreferences：优先 X25519，其次 P-256——锁定现代曲线，
@@ -181,6 +182,7 @@ func (s *Server) Run(ctx context.Context) error {
 				CurvePreferences: []tls.CurveID{tls.X25519, tls.CurveP256},
 			})
 		if terr != nil {
+			s.Close()
 			return terr
 		}
 		s.setTLSListener(tlsLn)
