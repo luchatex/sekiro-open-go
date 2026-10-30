@@ -77,7 +77,12 @@ make build                      # 产出 bin/sekiro
 ./bin/sekiro -port 5612         # 默认端口与原版一致
 
 # 方式二：Docker（拉取预构建镜像，多架构 amd64/arm64，随版本发布更新）
+# --memory-swap 与 --memory 相等 = 容器不使用 swap；
+# json-file 不配置 max-size 会无限增长，docker run 部署必须显式带上。
 docker run -d --name sekiro -p 5612:5612 --restart unless-stopped \
+  --memory=4g --memory-swap=4g \
+  --log-driver=json-file --log-opt max-size=50m --log-opt max-file=3 \
+  -e GOMEMLIMIT=3GiB -e GOGC=100 \
   -e SEKIRO_OP_PASSWORD='监控密码' \
   ghcr.io/luchatex/sekiro-open-go:latest
 
@@ -97,6 +102,10 @@ curl "http://127.0.0.1:5612/business/groupList"
 | `-op-password` | `SEKIRO_OP_PASSWORD` | 空 | `/op` 监控路径访问密码；连续输错 3 次锁定来源 IP 2 分钟。空 = 无鉴权 |
 | `-tls-cert/-tls-key` | `SEKIRO_TLS_CERT/KEY` | 空 | 同时提供则启用 wss 监听 |
 | `-tls-port` | `SEKIRO_TLS_PORT` | `5613` | wss 监听端口 |
+
+Docker 部署还建议设置 Go runtime 环境变量：`GOMEMLIMIT=3GiB`（容器 4GB 限制下的
+GC 软目标）和 `GOGC=100`（默认值）。`GOMEMLIMIT` 不是硬限制，也不能修复泄漏；
+若进程仍持续上涨，应由 4GB 容器限制兜底并排查 live heap。
 
 优雅关停：SIGTERM/SIGINT 等待在途调用回包（上限 20s 后退）。
 

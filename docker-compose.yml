@@ -31,13 +31,24 @@ services:
       # /op 监控路径密码保护：宿主机 .env 定义 OP_PASSWORD 后启用
       # （未定义则不启用鉴权；连续登录失败 3 次锁定来源 IP 2 分钟）
       SEKIRO_OP_PASSWORD: "${OP_PASSWORD:-}"
+      # Go runtime 软内存目标：接近该值时 GC 更积极，但不阻止继续分配。
+      # 只作为 4GB 容器硬限制前的缓冲，不是泄漏修复；按容器限制的约 75% 设置。
+      GOMEMLIMIT: "${GOMEMLIMIT:-3GiB}"
+      # 先保持默认 100；若无泄漏且 CPU 有余量，才考虑 75/50 换取更低 RSS。
+      GOGC: "${GOGC:-100}"
       TZ: Asia/Shanghai
+    # 宿主机保护：软限制无法阻止 OOM，硬限制用于防止异常进程拖垮整机。
+    # 先用修复版重启观察实际峰值，再按需通过 .env 调整；禁止内存 swap 兜底。
+    mem_limit: "${SEKIRO_MEM_LIMIT:-4g}"
+    memswap_limit: "${SEKIRO_MEM_LIMIT:-4g}"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5612/business/groupList"]
       interval: 30s
       timeout: 3s
       start_period: 5s
       retries: 3
+    # 日志轮转已在编排层强制生效：单个文件 50MB，最多 3 个，总上限约 150MB。
+    # 若使用 docker run 而非 compose，必须显式传对应 --log-opt，否则 json-file 无上限。
     logging:
       driver: json-file
       options:
@@ -45,9 +56,3 @@ services:
         max-file: "3"
     security_opt:
       - no-new-privileges:true
-    # 资源限制按需放开：
-    # deploy:
-    #   resources:
-    #     limits:
-    #       cpus: "2.0"
-    #       memory: 512M

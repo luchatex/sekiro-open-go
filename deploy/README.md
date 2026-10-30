@@ -95,6 +95,71 @@ ss -tanp '( sport = :5612 )' | grep -c ESTAB
 ss -tan state time-wait '( dport = :5612 )' | wc -l
 ```
 
+## Docker 资源限制与日志轮转
+
+仓库根目录的 `docker-compose.yml` 已配置：
+
+```yaml
+mem_limit: "${SEKIRO_MEM_LIMIT:-4g}"
+memswap_limit: "${SEKIRO_MEM_LIMIT:-4g}"
+environment:
+  GOMEMLIMIT: "${GOMEMLIMIT:-3GiB}"
+  GOGC: "${GOGC:-100}"
+logging:
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+```
+
+可在根目录 `.env` 覆盖：
+
+```dotenv
+SEKIRO_MEM_LIMIT=4g
+GOMEMLIMIT=3GiB
+GOGC=100
+```
+
+参数含义和取舍：
+
+| 配置 | 作用 | 建议 |
+|---|---|---|
+| `mem_limit=4g` | cgroup 硬限制，超过会被 OOM kill，保护宿主机 | 按宿主机余量调整；这是保险，不是内存优化 |
+| `memswap_limit=4g` | 与 memory 相等，禁止 swap 掩盖内存问题 | 保持相等，避免换页拖慢整个服务 |
+| `GOMEMLIMIT=3GiB` | Go GC 的**软目标**，接近时更积极回收 | 取容器限制的 75%–90%，给栈、runtime、socket 缓冲留余量 |
+| `GOGC=100` | Go 默认 GC 频率 | 先保持 100；没有泄漏且 CPU 富余时才试 75，50 会增加显著 GC CPU |
+| `max-size=50m` + `max-file=3` | json-file 单文件与份数上限 | 总上限约 150MB，比 `100m×3` 更保守 |
+
+如果不用 compose，必须显式传入等价参数：
+
+```bash
+docker run -d --name sekiro \
+  --memory=4g --memory-swap=4g \
+  --log-driver=json-file --log-opt max-size=50m --log-opt max-file=3 \
+  -e GOMEMLIMIT=3GiB -e GOGC=100 \
+  -p 5612:5612 --restart unless-stopped \
+  ghcr.io/luchatex/sekiro-open-go:latest
+```
+
+注意事项：
+
+- `GOMEMLIMIT` 不是硬限制，不会阻止分配，也不能修复泄漏。live heap
+  超过限制时，进程仍会继续增长直到被 cgroup OOM kill。
+- 不要把 `GOMEMLIMIT` 设得远低于实际活跃堆，否则会持续高频 GC、增加延迟和 CPU。
+- `GOGC=50` 会让 GC 更频繁，典型代价是 CPU 上升；不要和“修复泄漏”混为一谈。
+- 建议先部署修复版并重启，观察 24 小时实际 RSS，再决定是否把限制从 4GB 收紧。
+- 容器退出码 `137` 通常表示被 OOM kill：
+
+```bash
+docker inspect -f '{{.State.OOMKilled}} {{.State.ExitCode}}' sekiro-go
+docker stats sekiro-go
+```
+
+- 若使用宿主机 systemd 而非 Docker：在 unit 中设置
+  `MemoryMax=4G`、`MemorySwapMax=0`，并设置
+  `Environment=GOMEMLIMIT=3GiB`、`Environment=GOGC=100`；
+  日志由 journald 的 `SystemMaxUse` 限制。
+
 ## Cloudflare Tunnel（零证书、零公网 IP）
 
 ```bash
