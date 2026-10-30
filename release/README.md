@@ -20,7 +20,9 @@ GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o sekiro ./cmd/se
 
 部署与自检方法见 [deploy/](../deploy/) 与 [go/README.md](../go/README.md)。
 
-## Unreleased（main，待发布）
+## v1.0.1（2026-10-30）
+
+缺陷修复版本：
 
 - 修复断线/重连 Client 残留、未知 group 创建永久 actor、取消不生效等内存与
   goroutine 生命周期问题；空池退避与二进制 invoker 现可被调用方取消。
