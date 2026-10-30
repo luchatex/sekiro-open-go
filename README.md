@@ -77,6 +77,7 @@ make build                      # 产出 bin/sekiro
 ./bin/sekiro -port 5612         # 默认端口与原版一致
 
 # 方式二：Docker（拉取预构建镜像，多架构 amd64/arm64，随版本发布更新）
+# 发布流水线生成语义化标签 1.0.1 / 1.0；生产建议固定完整版本，不依赖可变的 latest。
 # --memory-swap 与 --memory 相等 = 容器不使用 swap；
 # json-file 不配置 max-size 会无限增长，docker run 部署必须显式带上。
 docker run -d --name sekiro -p 5612:5612 --restart unless-stopped \
@@ -84,7 +85,7 @@ docker run -d --name sekiro -p 5612:5612 --restart unless-stopped \
   --log-driver=json-file --log-opt max-size=50m --log-opt max-file=3 \
   -e GOMEMLIMIT=3GiB -e GOGC=100 \
   -e SEKIRO_OP_PASSWORD='监控密码' \
-  ghcr.io/luchatex/sekiro-open-go:latest
+  ghcr.io/luchatex/sekiro-open-go:1.0.1
 
 # 方式三：本地构建镜像
 docker compose up -d --build    # 编排在仓库根目录，多阶段构建，alpine 约 15MB

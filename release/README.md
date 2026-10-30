@@ -22,6 +22,9 @@ GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o sekiro ./cmd/se
 
 ## v1.0.1（2026-10-30）
 
+发布镜像：`ghcr.io/luchatex/sekiro-open-go:1.0.1`（同时生成 `1.0`）。
+发布流水线只生成语义化标签，不覆盖 `latest`；生产请固定完整版本。
+
 缺陷修复版本：
 
 - 修复断线/重连 Client 残留、未知 group 创建永久 actor、取消不生效等内存与
