@@ -94,18 +94,30 @@ func (r *Record) finishSysErr(reason, message string) {
 // attached 写成功后回调（对齐 afterForward）：启动超时定时器。
 func (r *Record) attached(c *Client, seq int32) {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.done {
+		return // Disconnect 与 attached 竞态：已终结就不再创建长定时器
+	}
 	r.client = c
 	r.seq = seq
-	r.mu.Unlock()
 	r.timer = time.AfterFunc(r.timeout, r.onTimeout)
+}
+
+func (r *Record) isDone() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.done
 }
 
 // commonSeq 响应 seq：WS 消费方优先回写原始 __sekiro_seq__（对齐 response(CommonRes)）。
 func (r *Record) commonSeq() int32 {
+	r.mu.Lock()
+	seq := r.seq
+	r.mu.Unlock()
 	if s := r.Params.GetInt(protocol.WSSeqNumber); s > 0 {
 		return int32(s)
 	}
-	return r.seq
+	return seq
 }
 
 // Fail CommonRes.failed 路径（分配失败/上游丢失等错误响应）。
@@ -138,11 +150,13 @@ func (r *Record) fail(message, clientID string) {
 //
 // 由HTTP handler 在 r.Context().Done() 时调用：客户端断连后不再
 // 驻留到15s 超时。
-func (r *Record) Abort() {
+// 返回 true 表示本次 Abort 赢得终结；false 表示已有响应/超时先完成，
+// HTTP handler 应等待该写回结束再关闭压缩流。
+func (r *Record) Abort() bool {
 	r.mu.Lock()
 	if r.done {
 		r.mu.Unlock()
-		return
+		return false
 	}
 	r.done = true
 	if r.timer != nil {
@@ -157,6 +171,7 @@ func (r *Record) Abort() {
 		c.mu.Unlock()
 	}
 	r.finishSysErr(metrics.ErrAbort, "") // 调用方提前断开
+	return true
 }
 
 // onTimeout 对齐 scheduleTimeout（含分段流的滚动续期）。
@@ -167,16 +182,17 @@ func (r *Record) onTimeout() {
 		return
 	}
 	if r.segment && time.Now().Before(r.extendedTil) {
-		// 分段传输模式不按一次性超时处理，滚动续期
-		r.timer.Reset(r.timeout)
+		// 只等到最后活跃时刻 + timeout，不能固定再加一个完整 timeout
+		r.timer.Reset(time.Until(r.extendedTil))
 		r.mu.Unlock()
 		return
 	}
 	r.done = true
+	c, seq := r.client, r.seq
 	r.mu.Unlock()
-	if c := r.client; c != nil {
+	if c != nil {
 		c.mu.Lock()
-		delete(c.pending, r.seq)
+		delete(c.pending, seq)
 		c.mu.Unlock()
 	}
 	r.sink.RespondCommon(-1, "timeout", r.clientID(), r.commonSeq())
@@ -197,6 +213,8 @@ func (r *Record) resultKind(p *protocol.Packet) metrics.Kind {
 }
 
 func (r *Record) clientID() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.client != nil {
 		return r.client.ID
 	}
@@ -225,10 +243,11 @@ func (r *Record) deliver(p *protocol.Packet) {
 		p.Seq = r.invokerSeq
 	}
 	// 无分段标记的包：要么是一次性响应（fast-json / v2 兼容），
-	// 要么是分段流的终结包（onceCall）——两者都终结本 Record，
-	// 必须停掉超时定时器并从 pending 移除，否则定时器在响应送达后
-	// 仍会空转触发二次写响应（gzip 场景会把未压缩数据写进已关闭的流）
-	finish := !isSegment
+	// 要么是分段流的终结包（onceCall）；带标记的空包也是 HTTP sink
+	// 的终结信号。三者必须使用同一判定，否则 sink 已返回而 Record
+	// 仍挂 pending，最终多记一次 timeout 并向已关闭响应二次写入。
+	finish := !isSegment || len(p.Data) == 0
+	c, seq := r.client, r.seq
 	if finish {
 		r.done = true
 		if r.timer != nil {
@@ -237,15 +256,17 @@ func (r *Record) deliver(p *protocol.Packet) {
 	}
 	r.mu.Unlock()
 
-	if finish {
-		if c := r.client; c != nil {
-			c.mu.Lock()
-			delete(c.pending, r.seq)
-			c.mu.Unlock()
-		}
+	if finish && c != nil {
+		c.mu.Lock()
+		delete(c.pending, seq)
+		c.mu.Unlock()
 	}
 
-	p.AddHeader(protocol.HeaderClientID, r.clientID())
+	clientID := ""
+	if c != nil {
+		clientID = c.ID
+	}
+	p.AddHeader(protocol.HeaderClientID, clientID)
 	r.sink.RespondPacket(p)
 
 	// 指标埋点：终结包按 status 分类计数；分段流中间包只累加响应流量。

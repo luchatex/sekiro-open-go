@@ -6,6 +6,7 @@ package native
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net"
@@ -29,6 +30,9 @@ type Channel struct {
 	log       *slog.Logger
 	client    *group.Client // 注册后非 nil
 	invoker   bool
+	ctx       context.Context
+	cancel    context.CancelFunc
+	dead      atomic.Bool
 	lastRead  atomic.Int64
 	lastWrite atomic.Int64
 	writeMu   sync.Mutex // 并发写保护：多个 HTTP handler 同时向同一
@@ -36,16 +40,22 @@ type Channel struct {
 	// 否则帧交错损坏（压测实证：偶发响应丢失 → 15s 超时）
 	closeOnce sync.Once
 	stopHB    chan struct{}
+
+	invMu      sync.Mutex
+	invPending map[int32]*group.Record // invoker 通道未完成调用
 }
 
 // ServeChannel 服务一条二进制协议连接（阻塞直到连接结束）。
 func ServeChannel(conn net.Conn, br *bufio.Reader, mgr *group.Manager, comp *compress.Manager, log *slog.Logger) {
+	ctx, cancel := context.WithCancel(context.Background())
 	ch := &Channel{
 		conn:   conn,
 		br:     br,
 		mgr:    mgr,
 		comp:   comp,
 		log:    log.With("peer", conn.RemoteAddr().String()),
+		ctx:    ctx,
+		cancel: cancel,
 		stopHB: make(chan struct{}),
 	}
 	defer ch.close()
@@ -57,12 +67,49 @@ func ServeChannel(conn net.Conn, br *bufio.Reader, mgr *group.Manager, comp *com
 
 func (c *Channel) close() {
 	c.closeOnce.Do(func() {
+		c.dead.Store(true)
+		c.cancel()
 		close(c.stopHB)
+		// 先释放 socket 与所有等待中的分配，再做会写回消费方的失败通知，
+		// 避免关闭路径被慢消费方或 actor 邮箱反向阻塞。
+		_ = c.conn.Close()
+		c.abortPendingInvokes()
 		if c.client != nil {
 			c.client.Disconnect()
 		}
-		c.conn.Close()
 	})
+}
+
+// trackInvoke 登记 invoker 未完成调用；重复 seq 返回 false。
+func (c *Channel) trackInvoke(seq int32, rec *group.Record) bool {
+	c.invMu.Lock()
+	defer c.invMu.Unlock()
+	if c.invPending == nil {
+		c.invPending = make(map[int32]*group.Record)
+	}
+	if _, exists := c.invPending[seq]; exists {
+		return false
+	}
+	c.invPending[seq] = rec
+	return true
+}
+
+func (c *Channel) finishInvoke(seq int32) {
+	c.invMu.Lock()
+	delete(c.invPending, seq)
+	c.invMu.Unlock()
+}
+
+// abortPendingInvokes invoker 断开时立即取消所有未完成调用，释放 provider
+// pending、定时器和请求参数，而不是等各自的 15s 超时。
+func (c *Channel) abortPendingInvokes() {
+	c.invMu.Lock()
+	recs := c.invPending
+	c.invPending = nil
+	c.invMu.Unlock()
+	for _, rec := range recs {
+		rec.Abort()
+	}
 }
 
 // heartbeatLoop 对齐 IdleStateHandler：写空闲 20s 发 TYPE_HEARTBEAT。
@@ -79,6 +126,8 @@ func (c *Channel) heartbeatLoop() {
 			}
 			hb := protocol.NewPacket(protocol.TypeHeartbeat)
 			if err := c.writePacket(hb); err != nil {
+				c.log.Info("binary provider closed", "reason", "heartbeat-write-error", "err", err)
+				c.close()
 				return
 			}
 			c.log.Debug("server write idle, send heartbeat")
@@ -88,11 +137,16 @@ func (c *Channel) heartbeatLoop() {
 
 func (c *Channel) writePacket(p *protocol.Packet) error {
 	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
 	c.lastWrite.Store(time.Now().UnixNano())
-	c.conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+	_ = c.conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
 	err := protocol.WritePacket(c.conn, p)
-	c.conn.SetWriteDeadline(time.Time{})
+	_ = c.conn.SetWriteDeadline(time.Time{})
+	c.writeMu.Unlock()
+	if err != nil {
+		// 写失败是连接死亡的权威信号；立即转 dead 并关闭，不能等下一次读超时。
+		c.dead.Store(true)
+		_ = c.conn.Close()
+	}
 	return err
 }
 
@@ -202,8 +256,14 @@ func (c *Channel) handleInvokerInvoke(p *protocol.Packet) {
 		return
 	}
 	params.Set(protocol.DoNotCompress, "true")
-	sink := &invokerSink{ch: c, closed: make(chan struct{})}
-	rec := group.NewRecord(params, sink, p.Seq, protocol.DefaultInvokeTimeout)
+	sink := &invokerSink{ch: c, seq: p.Seq, closed: make(chan struct{})}
+	timeout := time.Duration(params.GetInt(protocol.ParamInvokeTimeout)) * time.Millisecond
+	rec := group.NewRecord(params, sink, p.Seq, timeout) // <500ms 由 NewRecord 提升为默认值
+	if !c.trackInvoke(p.Seq, rec) {
+		c.log.Warn("duplicate invoker seq", "seq", p.Seq)
+		c.closeConn()
+		return
+	}
 	// 监控埋点：二进制 invoker 入口记总量与请求流量
 	rec.Meter = metrics.Default()
 	rec.Meter.Invoke(
@@ -211,13 +271,19 @@ func (c *Channel) handleInvokerInvoke(p *protocol.Packet) {
 		params.GetString(protocol.ParamAction),
 		int64(len(data)),
 	)
-	client, aerr := c.mgr.Allocate(
+	client, aerr := c.mgr.AllocateContext(
+		c.ctx,
 		params.GetString(protocol.ParamGroup),
 		params.GetString(protocol.ParamBindClient),
 		params.GetString(protocol.ParamConstantInvoke),
 	)
 	if aerr != nil {
-		rec.Fail(aerr.Error(), "")
+		if c.ctx.Err() != nil {
+			rec.Abort()
+			c.finishInvoke(p.Seq)
+			return
+		}
+		rec.Fail(aerr.Error(), "") // sink 写入后自行 finishInvoke
 		return
 	}
 	client.ForwardInvoke(rec)
@@ -286,13 +352,19 @@ func (t *nativeTransport) LastActive() time.Time {
 // invokerSink 二进制 invoker 的响应出口。
 type invokerSink struct {
 	ch     *Channel
+	seq    int32
 	closed chan struct{}
 	once   sync.Once
 }
 
 func (s *invokerSink) Closed() <-chan struct{} { return s.closed }
 
-func (s *invokerSink) finish() { s.once.Do(func() { close(s.closed) }) }
+func (s *invokerSink) finish() {
+	s.once.Do(func() {
+		s.ch.finishInvoke(s.seq)
+		close(s.closed)
+	})
+}
 
 func (s *invokerSink) RespondCommon(status int, message, clientID string, seq int32) {
 	pkt := protocol.NewPacket(protocol.STypeInvokeResponse)

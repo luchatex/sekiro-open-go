@@ -73,11 +73,26 @@ func (c *Client) IsDown() bool { return c.offline.Load() || !c.tr.Active() }
 //     SEKIRO_CLIENT_ID 为空（-cover 下 e2e 偶发 "clientId header
 //     missing" 实证）。超时定时器随之略微提前启动，误差可忽略。
 func (c *Client) ForwardInvoke(rec *Record) {
+	if c.IsDown() {
+		rec.fail("sekiro upstream lose connection", c.ID)
+		return
+	}
 	seq := c.newSeq()
 	c.mu.Lock()
+	// Disconnect 在 c.mu 外先置 offline，再持锁摘 pending。此处复核可堵住
+	// “检查通过 → Disconnect 完成清理 → 又登记新 pending”的窗口。
+	if c.offline.Load() {
+		c.mu.Unlock()
+		rec.fail("sekiro upstream lose connection", c.ID)
+		return
+	}
 	c.pending[seq] = rec
 	c.mu.Unlock()
 	rec.attached(c, seq)
+	if rec.isDone() {
+		// Disconnect/fail 已终结本条调用，不再向死连接写。
+		return
+	}
 	if err := c.tr.SendInvoke(rec.Params, seq); err != nil {
 		c.mu.Lock()
 		delete(c.pending, seq)
@@ -123,27 +138,27 @@ func (c *Client) HandleResponse(p *protocol.Packet) {
 
 // Disconnect 连接断开：注销并失败所有pending（对齐 onClientDisconnected）。
 //
-// 锁内只做「摘走pending」，逐个 rec.fail 必须在锁外：
-// fail 会经sink.RespondCommon 写回消费方（HTTP 即写TCP 响应），
-// 是阻塞 IO。若持锁执行，一个读端滞后的消费方会把整个 client 的
-// 锁按住——期间新到的 provider 响应（HandleResponse 需c.mu）
-// 与新下发调用（ForwardInvoke 需 c.mu）全部阻塞，
-// 于是「一个慢消费方」被放大成「整个 provider 不可用」。
+// 先同步置 offline 并摘走 pending，再投递索引清理，最后在锁外写失败响应：
+//   - 置 offline 必须在投递 actor 之前，堵住断线后又登记 pending 的窗口；
+//   - sink 写是阻塞 IO，不能在 client 锁或 group actor 中执行，否则一个
+//     慢消费方会冻结整个 group 的注册、分配和监控。
 func (c *Client) Disconnect() {
-	c.grp.unregister(c)
-	c.grp.post(func() {
-		c.mu.Lock()
-		recs := make([]*Record, 0, len(c.pending))
-		for seq, rec := range c.pending {
-			delete(c.pending, seq)
-			recs = append(recs, rec)
-		}
-		c.mu.Unlock()
+	c.offline.Store(true)
+	c.mu.Lock()
+	recs := make([]*Record, 0, len(c.pending))
+	for seq, rec := range c.pending {
+		delete(c.pending, seq)
+		recs = append(recs, rec)
+	}
+	if len(recs) > 0 {
+		c.pending = make(map[int32]*Record) // 释放 map 高水位 bucket
+	}
+	c.mu.Unlock()
 
-		for _, rec := range recs {
-			rec.fail("sekiro upstream lose connection", c.ID)
-		}
-	})
+	c.grp.unregister(c)
+	for _, rec := range recs {
+		rec.fail("sekiro upstream lose connection", c.ID)
+	}
 }
 
 // MarkOffline 主动下线（C_TYPE_OFFLINE，对齐 doOffline）。

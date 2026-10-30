@@ -145,3 +145,27 @@ func TestEmptyGroupIgnored(t *testing.T) {
 		t.Errorf("groups = %d, want 0", len(snap.Groups))
 	}
 }
+
+func TestIdleEntityEvicted(t *testing.T) {
+	r := New()
+	r.Invoke("stale", "random-action", 0)
+	r.Invoke("live", "a", 0)
+
+	r.mu.Lock()
+	r.ents[key{"stale", "random-action"}].lastSeen =
+		time.Now().Add(-entityIdleTTL - time.Minute).Unix()
+	r.writes = gcEvery - 1
+	r.mu.Unlock()
+
+	r.Invoke("live", "a", 0) // 触发惰性 GC；活跃维度刷新 lastSeen
+	r.mu.Lock()
+	_, stale := r.ents[key{"stale", "random-action"}]
+	_, live := r.ents[key{"live", "a"}]
+	r.mu.Unlock()
+	if stale {
+		t.Fatal("静默超过 48h 的 group/action 维度未被淘汰")
+	}
+	if !live {
+		t.Fatal("活跃维度被误删")
+	}
+}

@@ -1,6 +1,7 @@
 package group
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -36,6 +37,9 @@ type Group struct {
 	firstEmpty  time.Time
 	janitorStop chan struct{}
 	janitorOnce sync.Once
+	actorStop   chan struct{}
+	actorDone   chan struct{}
+	actorOnce   sync.Once
 }
 
 func newGroup(name string, log *slog.Logger) *Group {
@@ -46,6 +50,8 @@ func newGroup(name string, log *slog.Logger) *Group {
 		ring:        make(map[uint64]*Client),
 		offlineMap:  make(map[string]*Client),
 		janitorStop: make(chan struct{}),
+		actorStop:   make(chan struct{}),
+		actorDone:   make(chan struct{}),
 	}
 	go g.loop()
 	// 对齐 scheduleWithRate(clientList.removeIf(isDown), 60min)
@@ -54,20 +60,36 @@ func newGroup(name string, log *slog.Logger) *Group {
 }
 
 func (g *Group) loop() {
-	for fn := range g.mail {
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					g.log.Error("group event loop panic", "panic", r)
-				}
+	defer close(g.actorDone)
+	for {
+		select {
+		case fn := <-g.mail:
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						g.log.Error("group event loop panic", "panic", r)
+					}
+				}()
+				fn()
 			}()
-			fn()
-		}()
+		case <-g.actorStop:
+			return
+		}
 	}
 }
 
 func (g *Group) post(fn func()) {
-	g.mail <- fn
+	g.postContext(context.Background(), fn)
+}
+
+// postContext 投递 actor 任务；调用方取消或 group 关闭后立即返回，
+// 避免故障期邮箱满时无限堆积等待 goroutine。
+func (g *Group) postContext(ctx context.Context, fn func()) {
+	select {
+	case g.mail <- fn:
+	case <-ctx.Done():
+	case <-g.actorStop:
+	}
 }
 
 // janitor 每小时清理（对齐 scheduleWithRate(clientList.removeIf(isDown), 60min)）。
@@ -82,14 +104,36 @@ func (g *Group) janitor() {
 			g.post(func() {
 				kept := g.rotate[:0]
 				for _, c := range g.rotate {
-					if !c.IsDown() || c.offline.Load() {
+					if !c.IsDown() {
 						kept = append(kept, c)
 					}
 				}
-				g.rotate = kept
+				clear(g.rotate[len(kept):])
+				if len(kept) == 0 {
+					g.rotate = nil
+				} else {
+					g.rotate = kept
+				}
 			})
 		}
 	}
+}
+
+// removeRotate 从轮询切片移除指定 Client，并清空尾部指针槽。
+// 仅清理 len 不够：残余 backing array 仍可能被 GC 视为存活引用。
+func (g *Group) removeRotate(target *Client) {
+	kept := g.rotate[:0]
+	for _, c := range g.rotate {
+		if c != target {
+			kept = append(kept, c)
+		}
+	}
+	clear(g.rotate[len(kept):])
+	if len(kept) == 0 {
+		g.rotate = nil
+		return
+	}
+	g.rotate = kept
 }
 
 // ---- 注册/注销（对齐 registerNettyClient / unregisterNettyClient / offlineClient）----
@@ -104,6 +148,7 @@ func (g *Group) register(c *Client) {
 		c.connectedAt.Store(time.Now().UnixNano()) // 重注册=新连接顶替，时间随之刷新
 		if old, ok := g.ring[c.Key]; ok && old != c {
 			old.offline.Store(true)
+			g.removeRotate(old) // 被顶替连接不再参与轮询，也不能被 rotate 永久引用
 			if old.Active() {
 				// oldLifetime：旧连接刚活多久就被顶替。重连风暴的特征值——
 				// 周期性出现 ~30s 说明旧连接被服务端读空闲回收（旧版二进制
@@ -120,13 +165,25 @@ func (g *Group) register(c *Client) {
 			g.addKey(c.Key)
 		}
 		g.ring[c.Key] = c
-		g.rotate = append([]*Client{c}, g.rotate...) // addFirst
+		g.removeRotate(c) // 同一实例重复注册也不产生重复轮询项
+		if off, ok := g.offlineMap[c.ID]; ok && off != c {
+			delete(g.offlineMap, c.ID) // 新连接已上线，清除旧代际离线记录
+		}
+		g.rotate = append(g.rotate, nil)
+		copy(g.rotate[1:], g.rotate[:len(g.rotate)-1])
+		g.rotate[0] = c // addFirst
 	})
 }
 
 func (g *Group) unregister(c *Client) {
 	g.post(func() {
 		c.offline.Store(true)
+		g.removeRotate(c)
+		// offlineClient 会先从 ring 删除，旧实现因此在 !ok 处提前返回，
+		// offlineMap 永远无法清理。离线记录按 Client 代际精确删除。
+		if off, ok := g.offlineMap[c.ID]; ok && off == c {
+			delete(g.offlineMap, c.ID)
+		}
 		old, ok := g.ring[c.Key]
 		if !ok {
 			g.log.Warn("unregister none exist client", "clientId", c.ID)
@@ -136,7 +193,6 @@ func (g *Group) unregister(c *Client) {
 		// 防止重复注册场景把新连接误删导致假死
 		if old == c {
 			delete(g.ring, c.Key)
-			delete(g.offlineMap, c.ID)
 			g.removeKey(c.Key)
 		}
 	})
@@ -157,6 +213,7 @@ func (g *Group) offlineClient(c *Client) {
 		c.offline.Store(true)
 		delete(g.ring, c.Key)
 		g.removeKey(c.Key)
+		g.removeRotate(c)
 		// offlineMap 保留"已下线但未断开"的连接：bind_client 定向调用时
 		// fetchByClientID 查不到会直接报错，保留可让业务侧拿到明确归属。
 		// 注意：该表只在 unregister（连接断开）时移除，客户端下线后长期不
@@ -190,34 +247,42 @@ func (g *Group) addKey(k uint64) {
 // 对齐 Java：rotate/consistent 分配失败经 wrapWithEmptyDelay（文案
 // "pool queue empty"，含退避延时）；bind_client 查找失败不经退避，
 // 立即返回 "no device found for clientId:x"（NettySekiroGroup.fetchByClientId）。
-func (g *Group) allocate(bindClient, constantKey string, reply chan<- allocResult) {
-	g.post(func() {
+func (g *Group) allocate(ctx context.Context, bindClient, constantKey string, reply chan<- allocResult) {
+	g.postContext(ctx, func() {
 		switch {
 		case bindClient != "":
 			c := g.fetchByClientID(bindClient)
 			if c == nil {
-				reply <- allocResult{err: fmt.Errorf("no device found for clientId:%s", bindClient)}
+				replyAlloc(ctx, reply, allocResult{err: fmt.Errorf("no device found for clientId:%s", bindClient)})
 				return
 			}
-			reply <- allocResult{client: c}
+			replyAlloc(ctx, reply, allocResult{client: c})
 		case constantKey != "":
 			c := g.consistentAllocate(protocol.MurmurHashString(constantKey))
 			if c == nil {
-				g.backoffFail(reply)
+				g.backoffFail(ctx, reply)
 				return
 			}
 			g.emptyCount = 0
-			reply <- allocResult{client: c}
+			replyAlloc(ctx, reply, allocResult{client: c})
 		default:
 			c := g.rotateAllocate()
 			if c == nil {
-				g.backoffFail(reply)
+				g.backoffFail(ctx, reply)
 				return
 			}
 			g.emptyCount = 0
-			reply <- allocResult{client: c}
+			replyAlloc(ctx, reply, allocResult{client: c})
 		}
 	})
+}
+
+// replyAlloc 回填分配结果；调用方已取消时不得再阻塞 actor。
+func replyAlloc(ctx context.Context, reply chan<- allocResult, res allocResult) {
+	select {
+	case reply <- res:
+	case <-ctx.Done():
+	}
 }
 
 func (g *Group) fetchByClientID(id string) *Client {
@@ -269,6 +334,7 @@ func (g *Group) scanFrom(start int) *Client {
 func (g *Group) rotateAllocate() *Client {
 	for len(g.rotate) > 0 {
 		c := g.rotate[0]
+		g.rotate[0] = nil // 清空已弹出的指针槽
 		g.rotate = g.rotate[1:]
 		if c.IsDown() {
 			continue
@@ -280,6 +346,7 @@ func (g *Group) rotateAllocate() *Client {
 		g.rotate = append(g.rotate, c) // addLast（轮询回填）
 		return c
 	}
+	g.rotate = nil
 	return nil
 }
 
@@ -292,7 +359,7 @@ func (g *Group) rotateAllocate() *Client {
 //
 // 机理：下游宕机时若快速返回空池，上游数千线程伪死循环会打满 CPU
 // （Java 注释：2000 并发 CPU 占用 70%），用延时把 QPS 压回合理水位。
-func (g *Group) backoffFail(reply chan<- allocResult) {
+func (g *Group) backoffFail(ctx context.Context, reply chan<- allocResult) {
 	if g.emptyCount == 0 {
 		g.firstEmpty = time.Now()
 	}
@@ -300,7 +367,7 @@ func (g *Group) backoffFail(reply chan<- allocResult) {
 	n := g.emptyCount
 	g.log.Info("pool queue empty", "count", n)
 	if n <= 5 {
-		reply <- allocResult{err: ErrPoolEmpty}
+		replyAlloc(ctx, reply, allocResult{err: ErrPoolEmpty})
 		return
 	}
 	delay := time.Duration(n-4) * time.Second
@@ -315,9 +382,13 @@ func (g *Group) backoffFail(reply chan<- allocResult) {
 	} else if delay > 10*time.Second {
 		delay = 10 * time.Second
 	}
-	time.AfterFunc(delay, func() {
-		reply <- allocResult{err: ErrPoolEmpty}
+	timer := time.AfterFunc(delay, func() {
+		replyAlloc(ctx, reply, allocResult{err: ErrPoolEmpty})
 	})
+	if ctx.Done() != nil {
+		// 调用方断开后立即释放退避定时器，而不是继续空等到 2–20s。
+		context.AfterFunc(ctx, func() { timer.Stop() })
+	}
 }
 
 type allocResult struct {
@@ -353,19 +424,24 @@ func (g *Group) clientDetails(reply chan<- []ClientInfo) {
 // kick 断开指定 clientId 的活跃连接（监控页踢下线）。
 // 与 MarkOffline（业务下线，连接保留）不同：直接关闭 transport，
 // 连接关闭触发 Disconnect → 彻底注销 + pending 失败。
-func (g *Group) kick(clientID string, reply chan<- bool) {
+func (g *Group) kick(clientID string, reply chan<- *Client) {
 	g.post(func() {
 		c := g.fetchByClientID(clientID)
 		if c == nil {
-			reply <- false
+			reply <- nil
 			return
 		}
 		g.log.Warn("client kicked via monitor", "clientId", clientID)
-		c.tr.Close() // 关闭连接 → readLoop 退出 → Disconnect 彻底清理
-		reply <- true
+		// 实际 Close 由 actor 外的 Manager 执行：native Close 会同步回调
+		// Disconnect 并再次 post 当前 group，actor 内执行可能自死锁。
+		reply <- c
 	})
 }
 
 func (g *Group) close() {
-	g.janitorOnce.Do(func() { close(g.janitorStop) })
+	g.actorOnce.Do(func() {
+		g.janitorOnce.Do(func() { close(g.janitorStop) })
+		close(g.actorStop)
+	})
+	<-g.actorDone
 }

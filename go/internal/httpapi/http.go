@@ -181,12 +181,17 @@ func handleInvoke(w http.ResponseWriter, r *http.Request, mgr *group.Manager, lo
 		int64(len(r.URL.RawQuery))+int64(bodyLen),
 	)
 
-	client, err := mgr.Allocate(
+	client, err := mgr.AllocateContext(
+		r.Context(),
 		params.GetString(protocol.ParamGroup),
 		params.GetString(protocol.ParamBindClient),
 		params.GetString(protocol.ParamConstantInvoke),
 	)
 	if err != nil {
+		if r.Context().Err() != nil {
+			rec.Abort() // 调用方已断开，记 caller-abort，不写死连接
+			return
+		}
 		rec.Fail(err.Error(), "")
 	} else {
 		client.ForwardInvoke(rec)
@@ -200,11 +205,19 @@ func handleInvoke(w http.ResponseWriter, r *http.Request, mgr *group.Manager, lo
 	select {
 	case <-sink.Closed():
 	case <-r.Context().Done():
-		rec.Abort()
-		log.Debug("invoke consumer disconnected",
-			"group", params.GetString(protocol.ParamGroup),
-			"action", params.GetString(protocol.ParamAction),
-			"peer", r.RemoteAddr)
+		if rec.Abort() {
+			// 先等在途响应写完并封口，再让 handler 返回关闭 gzip 流。
+			// 否则刚通过 done 检查的分段写仍可能与 Close 并发。
+			sink.cancel()
+			log.Debug("invoke consumer disconnected",
+				"group", params.GetString(protocol.ParamGroup),
+				"action", params.GetString(protocol.ParamAction),
+				"peer", r.RemoteAddr)
+			return
+		}
+		// 其他 goroutine 已赢得终结并正在写响应。必须等写完再返回，
+		// 否则 handler defer 关闭 gzip 流会与并发 Write 竞争。
+		<-sink.Closed()
 	}
 }
 
@@ -437,11 +450,45 @@ func (s *httpSink) WireBytes() int64 {
 	return 0
 }
 
+// responseWriteTimeout 单次响应写出上限。不能给 http.Server 设全局
+// WriteTimeout（会截断合法的 15s+ 长轮询等待），只在真正写响应时设 deadline。
+const responseWriteTimeout = 30 * time.Second
+
+// setWriteDeadline 返回清理函数。不支持 deadline 的测试 ResponseWriter 降级放行。
+func (s *httpSink) setWriteDeadline() func() {
+	rc := http.NewResponseController(s.w)
+	if err := rc.SetWriteDeadline(time.Now().Add(responseWriteTimeout)); err != nil {
+		return func() {}
+	}
+	return func() { _ = rc.SetWriteDeadline(time.Time{}) }
+}
+
 func (s *httpSink) finish() { s.once.Do(func() { close(s.closed) }) }
+
+// cancel 封口并等待已持有 s.mu 的在途写完成。返回后不会再有任何响应写入。
+func (s *httpSink) cancel() {
+	s.mu.Lock()
+	s.finish()
+	s.mu.Unlock()
+}
+
+func (s *httpSink) closedAlready() bool {
+	select {
+	case <-s.closed:
+		return true
+	default:
+		return false
+	}
+}
 
 func (s *httpSink) RespondCommon(status int, message, clientID string, seq int32) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closedAlready() {
+		return
+	}
+	clearWrite := s.setWriteDeadline()
+	defer clearWrite()
 	body := commonResJSON(status, message, clientID, nil, &seq)
 	s.w.Header().Set("Content-Type", protocol.HTTPContentTypeJSON)
 	s.w.Header().Set("Content-Length", strconv.Itoa(len(body)))
@@ -455,6 +502,11 @@ func (s *httpSink) RespondCommon(status int, message, clientID string, seq int32
 func (s *httpSink) RespondPacket(p *protocol.Packet) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closedAlready() {
+		return
+	}
+	clearWrite := s.setWriteDeadline()
+	defer clearWrite()
 
 	if p.GetHeader(protocol.PayloadContentType) == protocol.ContentTypeSekiroFastJson {
 		// 内部快速反序列化分支（2021+ 客户端）

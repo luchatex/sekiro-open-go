@@ -75,9 +75,10 @@ func (m *Metrics) addResult(k Kind, bytesOut, wireOut int64) {
 type key struct{ group, action string }
 
 type entity struct {
-	m       Metrics
-	hours   map[int64]*Metrics // unixHour（UTC）→ 该小时累计
-	reasons map[string]int64   // 系统错误原因 → 计数（仅 SysErr 写入）
+	m        Metrics
+	hours    map[int64]*Metrics // unixHour（UTC）→ 该小时累计
+	reasons  map[string]int64   // 系统错误原因 → 计数（仅 SysErr 写入）
+	lastSeen int64              // 最近写入 unix 秒；用于淘汰已静默维度
 }
 
 type secBucket struct {
@@ -171,6 +172,7 @@ func (r *Recorder) entityLocked(group, action string) *entity {
 		e = &entity{hours: make(map[int64]*Metrics)}
 		r.ents[k] = e
 	}
+	e.lastSeen = time.Now().Unix()
 	return e
 }
 
@@ -183,21 +185,27 @@ func (e *entity) hourLocked(h int64) *Metrics {
 	return agg
 }
 
-// gcLocked 每 gcEvery 次写清理超过 48 小时的小时桶（惰性，无需独立 goroutine）。
-const gcEvery = 1024
+// gcLocked 每 gcEvery 次写清理过期小时桶与长期静默的 group/action 维度。
+// 原条件 e.m.Total==0 对正常维度永远不成立，任意随机 action 会永久驻留；
+// 维度整体静默 48h 后删除，与小时桶保留窗口一致。
+const (
+	gcEvery       = 1024
+	entityIdleTTL = 48 * time.Hour
+)
 
 func (r *Recorder) gcLocked(nowHour int64) {
 	r.writes++
 	if r.writes%gcEvery != 0 {
 		return
 	}
+	now := time.Now().Unix()
 	for k, e := range r.ents {
 		for h := range e.hours {
 			if h < nowHour-48 {
 				delete(e.hours, h)
 			}
 		}
-		if e.m.Total == 0 && len(e.hours) == 0 {
+		if now-e.lastSeen >= int64(entityIdleTTL/time.Second) {
 			delete(r.ents, k)
 		}
 	}

@@ -1,6 +1,7 @@
 package group
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 	"testing"
@@ -197,10 +198,81 @@ func TestUnregisterIdentityCheck(t *testing.T) {
 	}
 }
 
+func TestReconnectChurnDoesNotRetainClients(t *testing.T) {
+	m := newTestManager()
+	defer m.Close()
+	g := m.GetOrCreate("churn")
+
+	// 真实断线路径：register 后 unregister。即使没有调用触发轮询清理，
+	// rotate 也不能永久引用已经断开的 Client 及其 Transport/pending。
+	for i := 0; i < 100; i++ {
+		c := NewClient(newFakeTransport(), g, "dev1", slog.Default())
+		g.register(c)
+		g.unregister(c)
+	}
+	waitActor()
+	if got := len(g.rotate); got != 0 {
+		t.Fatalf("断线重连后 rotate 保留 %d 个历史 Client，want 0", got)
+	}
+}
+
+func TestUnknownGroupQueriesDoNotCreateGroup(t *testing.T) {
+	m := newTestManager()
+	defer m.Close()
+
+	if _, err := m.Allocate("ghost", "", ""); err != ErrPoolEmpty {
+		t.Fatalf("未知 group 分配错误 = %v, want %v", err, ErrPoolEmpty)
+	}
+	if got := m.EnabledClientIDs("ghost"); len(got) != 0 {
+		t.Fatalf("未知 group 客户端列表 = %v, want empty", got)
+	}
+	if m.KickClient("ghost", "dev1") {
+		t.Fatal("未知 group 不应踢到设备")
+	}
+	if got := m.Names(); len(got) != 0 {
+		t.Fatalf("只读/失败请求创建了 group: %v", got)
+	}
+}
+
+func TestForwardInvokeAfterDisconnectFailsWithoutSend(t *testing.T) {
+	m := newTestManager()
+	defer m.Close()
+	g := m.GetOrCreate("disconnected")
+	tr := newFakeTransport()
+	c := NewClient(tr, g, "dev1", slog.Default())
+	g.register(c)
+	waitActor()
+	c.Disconnect()
+	waitActor()
+
+	sink := newFakeSink()
+	rec := NewRecord(orderedjson.New(), sink, -1, time.Second)
+	c.ForwardInvoke(rec)
+
+	tr.mu.Lock()
+	sends := len(tr.sendCalls)
+	tr.mu.Unlock()
+	if sends != 0 {
+		t.Fatalf("断线 Client 仍收到 %d 次下发，want 0", sends)
+	}
+	c.mu.Lock()
+	pending := len(c.pending)
+	c.mu.Unlock()
+	if pending != 0 {
+		t.Fatalf("断线后下发残留 %d 条 pending", pending)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.common) != 1 || sink.common[0].message != "sekiro upstream lose connection" {
+		t.Fatalf("断线后下发的失败响应 = %+v", sink.common)
+	}
+}
+
 func TestEmptyPoolBackoff(t *testing.T) {
 	// 退避策略：≤5 次立即失败；第 6 次起延时 (n-4)s
 	m := newTestManager()
 	defer m.Close()
+	m.GetOrCreate("backoff") // 退避只作用于已存在的空 group；未知 group 快速失败
 
 	start := time.Now()
 	for i := 1; i <= 6; i++ {
@@ -216,6 +288,35 @@ func TestEmptyPoolBackoff(t *testing.T) {
 		if i == 6 && el < 1500*time.Millisecond {
 			t.Fatalf("iter 6 should delay ~2s, took %v (start offset %v)", el, time.Since(start))
 		}
+	}
+}
+
+func TestAllocateContextCancelDuringBackoff(t *testing.T) {
+	m := newTestManager()
+	defer m.Close()
+	m.GetOrCreate("cancel-backoff")
+	for i := 0; i < 5; i++ {
+		if _, err := m.Allocate("cancel-backoff", "", ""); err != ErrPoolEmpty {
+			t.Fatalf("前置空池调用 %d: %v", i+1, err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := m.AllocateContext(ctx, "cancel-backoff", "", "")
+		result <- err
+	}()
+	time.Sleep(50 * time.Millisecond) // 进入第 6 次退避等待
+	cancel()
+
+	select {
+	case err := <-result:
+		if err != context.Canceled {
+			t.Fatalf("取消后退避返回 %v, want context.Canceled", err)
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("调用方取消后仍卡在空池退避中")
 	}
 }
 

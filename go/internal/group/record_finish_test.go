@@ -46,6 +46,25 @@ func TestRecordFinishOnOnceResponse(t *testing.T) {
 }
 
 // 分段流首包不终结，终结包（无 flag）终结。
+func TestAttachedAfterFinishDoesNotCreateTimer(t *testing.T) {
+	m := newTestManager()
+	defer m.Close()
+	g := m.GetOrCreate("attach-after-finish")
+	c := NewClient(newFakeTransport(), g, "client-a", slog.Default())
+	rec := NewRecord(orderedjson.New(), newFakeSink(), -1, time.Hour)
+
+	// Disconnect 可在 pending 已登记、attached 尚未执行时终结 Record。
+	// 已终结的 Record 不得再创建长定时器保留 client/sink/params。
+	rec.fail("sekiro upstream lose connection", c.ID)
+	rec.attached(c, 9)
+	rec.mu.Lock()
+	timer := rec.timer
+	rec.mu.Unlock()
+	if timer != nil {
+		t.Fatal("Record 终结后 attached 仍创建了超时定时器")
+	}
+}
+
 func TestRecordFinishOnSegmentTerminator(t *testing.T) {
 	m := newTestManager()
 	defer m.Close()
@@ -83,5 +102,42 @@ func TestRecordFinishOnSegmentTerminator(t *testing.T) {
 	time.Sleep(900 * time.Millisecond)
 	if n := len(sink.packets) + len(sink.common); n != 3 {
 		t.Fatalf("sink got %d responses total, want 3 (timer not cancelled after terminator)", n)
+	}
+}
+
+func TestEmptyFlaggedSegmentTerminatesRecord(t *testing.T) {
+	m := newTestManager()
+	defer m.Close()
+	g := m.GetOrCreate("empty-segment")
+	c := NewClient(newFakeTransport(), g, "client-a", slog.Default())
+	sink := newFakeSink()
+	rec := NewRecord(orderedjson.New(), sink, -1, 600*time.Millisecond)
+	rec.attached(c, 10)
+	c.mu.Lock()
+	c.pending[10] = rec
+	c.mu.Unlock()
+
+	h := protocol.NewHeaders()
+	h.Set(protocol.SegmentStreamFlag, "true")
+	rec.deliver(&protocol.Packet{Type: protocol.STypeInvokeResponse, Seq: 10, Headers: h})
+
+	rec.mu.Lock()
+	done := rec.done
+	rec.mu.Unlock()
+	if !done {
+		t.Fatal("带分段标记的空终结包未终结 Record")
+	}
+	c.mu.Lock()
+	_, pending := c.pending[10]
+	c.mu.Unlock()
+	if pending {
+		t.Fatal("带分段标记的空终结包仍残留 pending")
+	}
+
+	time.Sleep(900 * time.Millisecond)
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.common) != 0 {
+		t.Fatalf("空终结包之后仍触发 timeout: %+v", sink.common)
 	}
 }

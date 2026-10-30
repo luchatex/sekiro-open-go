@@ -22,20 +22,23 @@ import (
 // （HTTP 响应写不出去时TCP 写阻塞的真实情形）。
 type blockingSink struct {
 	release   chan struct{}
+	entered   chan struct{}
 	blockFor  time.Duration
 	failCount int
 	mu        sync.Mutex
 	once      sync.Once
+	enterOnce sync.Once
 }
 
 func newBlockingSink(d time.Duration) *blockingSink {
-	return &blockingSink{release: make(chan struct{}), blockFor: d}
+	return &blockingSink{release: make(chan struct{}), entered: make(chan struct{}), blockFor: d}
 }
 
 func (s *blockingSink) RespondCommon(int, string, string, int32) {
 	s.mu.Lock()
 	s.failCount++
 	s.mu.Unlock()
+	s.enterOnce.Do(func() { close(s.entered) })
 	select {
 	case <-time.After(s.blockFor):
 	case <-s.release:
@@ -100,6 +103,52 @@ func TestDisconnectFailOutsideLock(t *testing.T) {
 	slow.mu.Unlock()
 	if n != 1 {
 		t.Fatalf("慢消费方收到 %d 次失败响应，want 1", n)
+	}
+}
+
+func TestDisconnectSlowConsumerDoesNotBlockGroupActor(t *testing.T) {
+	m := newTestManager()
+	defer m.Close()
+	g := m.GetOrCreate("slow-consumer")
+	c := NewClient(newFakeTransport(), g, "client-a", slog.Default())
+	g.register(c)
+	waitActor()
+
+	slow := newBlockingSink(1500 * time.Millisecond)
+	t.Cleanup(func() {
+		if slow.release != nil {
+			close(slow.release)
+		}
+	})
+	c.ForwardInvoke(NewRecord(orderedjson.New(), slow, -1, 10*time.Second))
+	disconnected := make(chan struct{})
+	go func() {
+		c.Disconnect()
+		close(disconnected)
+	}()
+	select {
+	case <-slow.entered:
+	case <-time.After(time.Second):
+		t.Fatal("Disconnect 未进入失败响应")
+	}
+
+	// 失败响应的网络 IO 不得占住 group actor；否则注册、分配和监控全部冻结。
+	replied := make(chan struct{})
+	go func() {
+		m.EnabledClientIDs("slow-consumer")
+		close(replied)
+	}()
+	select {
+	case <-replied:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("慢消费方阻塞了 group actor")
+	}
+	close(slow.release)
+	slow.release = nil
+	select {
+	case <-disconnected:
+	case <-time.After(time.Second):
+		t.Fatal("Disconnect 未退出")
 	}
 }
 
