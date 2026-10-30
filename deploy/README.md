@@ -151,8 +151,9 @@ docker run -d --name sekiro \
 - 容器退出码 `137` 通常表示被 OOM kill：
 
 ```bash
-docker inspect -f '{{.State.OOMKilled}} {{.State.ExitCode}}' sekiro-go
-docker stats sekiro-go
+# compose 容器名为 sekiro-go；docker run 示例中为 sekiro，按实际名称替换
+docker inspect -f '{{.State.OOMKilled}} {{.State.ExitCode}}' sekiro
+docker stats sekiro
 ```
 
 - 若使用宿主机 systemd 而非 Docker：在 unit 中设置

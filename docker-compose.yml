@@ -28,6 +28,10 @@ services:
       SEKIRO_PORT: 5612
       # 调试模式（对齐原版 sekiro.localDebug），生产保持 false
       SEKIRO_LOCAL_DEBUG: "false"
+      # 日志级别：生产可用 warn 关闭逐笔调用日志（调用记录仍可在 /op 查看）
+      SEKIRO_LOG_LEVEL: "${SEKIRO_LOG_LEVEL:-info}"
+      # 公网不需要监控页时可设为 true（关闭 /op 与 /op/api/*）
+      SEKIRO_OP_DISABLE: "${SEKIRO_OP_DISABLE:-false}"
       # /op 监控路径密码保护：宿主机 .env 定义 OP_PASSWORD 后启用
       # （未定义则不启用鉴权；连续登录失败 3 次锁定来源 IP 2 分钟）
       SEKIRO_OP_PASSWORD: "${OP_PASSWORD:-}"

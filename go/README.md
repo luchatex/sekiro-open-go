@@ -7,7 +7,7 @@
 ## 快速开始
 
 ```bash
-# 构建（Go 1.22+，外部依赖仅 coder/websocket 与 golang/snappy）
+# 构建（Go 1.27+，外部依赖仅 coder/websocket 与 golang/snappy）
 make build          # 产出 bin/sekiro（Windows: go build -o bin/sekiro.exe ./cmd/sekiro）
 
 # 运行（默认端口 5612，与原版一致）
@@ -41,7 +41,7 @@ http://127.0.0.1:5612/op
 - **group 明细表**：六指标 + 24h sparkline，点击行展开 action 子表
 - **系统错误分析**：原因分布（timeout / dispatch-failed / caller-abort）+ 最近 100 条事件
   （时间/group/action/详情/clientId/通道），定位「系统错误 N 条」的具体构成
-- **数据 API**：`/op/api/stats`、`/op/api/errors` 返回 JSON 快照（可自建报表/对接 Grafana JSON datasource）
+- **数据 API**：`/op/api/stats`、`/op/api/clients`、`/op/api/errors` 返回 JSON 快照（可自建报表/对接 Grafana JSON datasource）
 - **实现**：`internal/metrics` 内存统计（小时桶保留 48h、天精度由小时桶按本地时区聚合），
   进程重启清零、无持久化；埋点覆盖 HTTP 与二进制 invoker 两条消费通道
 - **开关**：`-op-disable` 或环境变量 `SEKIRO_OP_DISABLE=true` 关闭页面与 API
@@ -50,7 +50,7 @@ http://127.0.0.1:5612/op
   12h 会话 Cookie；**连续输错 3 次锁定来源 IP 2 分钟**（期内直接 429）。
   docker compose 在宿主机 `.env` 定义 `OP_PASSWORD` 即生效；未配置密码 =
   与 `/business` API 一致无鉴权，公网部署建议启用或前置网关访问控制
-- **curl 脚本访问**（启用密码时）：先 `curl -c cookie.txt -X POST -d '{"password":"xxx"}' .../op/api/login`，再 `curl -b cookie.txt .../op/api/stats`
+- **curl 脚本访问**（启用密码时）：先 `curl -c cookie.txt -H 'Content-Type: application/json' -X POST -d '{"password":"xxx"}' http://127.0.0.1:5612/op/api/login`，再 `curl -b cookie.txt http://127.0.0.1:5612/op/api/stats`；登录与踢下线接口只接受 JSON body
 
 ## Docker 部署
 
@@ -59,20 +59,28 @@ http://127.0.0.1:5612/op
 ```bash
 # 方式零：拉取 GHCR 预构建镜像（每个 v* tag 由 CI 自动发布，amd64/arm64）
 docker run -d --name sekiro -p 5612:5612 --restart unless-stopped \
+  --memory=4g --memory-swap=4g \
+  --log-driver=json-file --log-opt max-size=50m --log-opt max-file=3 \
+  -e GOMEMLIMIT=3GiB -e GOGC=100 \
   ghcr.io/luchatex/sekiro-open-go:latest
 
-# 方式一：docker compose（推荐，编排文件在仓库根目录）
+# 方式一：docker compose（推荐，编排文件在仓库根目录，已内置资源限制与日志轮转）
 docker compose up -d --build
 docker compose ps          # 等待 healthcheck 变 healthy
 curl "http://127.0.0.1:5612/business/groupList"
 
 # 方式二：纯 docker
 docker build -t sekiro-go .
-docker run -d --name sekiro -p 5612:5612 --restart unless-stopped sekiro-go
+docker run -d --name sekiro -p 5612:5612 --restart unless-stopped \
+  --memory=4g --memory-swap=4g \
+  --log-driver=json-file --log-opt max-size=50m --log-opt max-file=3 \
+  -e GOMEMLIMIT=3GiB -e GOGC=100 sekiro-go
 ```
 
-- 宿主机端口通过 `.env`（`SEKIRO_HTTP_PORT`，参考 `.env.example`）调整，容器内固定 5612
-- 容器配置对齐 `internal/config`：`SEKIRO_PORT` / `SEKIRO_LOCAL_DEBUG` 环境变量，等价于 `-port/-debug`
+- 宿主机端口通过 `.env`（`SEKIRO_HTTP_PORT`，参考 [`.env.example`](../.env.example)）调整，容器内固定 5612
+- 容器配置对齐 `internal/config`：`SEKIRO_PORT` / `SEKIRO_LOCAL_DEBUG` / `SEKIRO_OP_PASSWORD` 等环境变量；完整清单见根 README
+- `GOMEMLIMIT` 是 GC 软目标，不是容器硬限制，也不能修复泄漏；4GB `--memory` 才是宿主机保护。`GOGC=50` 会显著增加 GC CPU，不要作为默认值
+- 裸 `docker run` 不配置 `--log-opt max-size` 时 json-file 日志无上限；生产请保留上面的日志参数
 - 构建默认走 goproxy.cn 国内代理，海外可用 `--build-arg GOPROXY=https://proxy.golang.org,direct` 覆盖
 - 服务端无状态（连接与路由在内存），无需挂载卷；水平扩容时多个 provider 直连即可
 - 生产建议：前置 Nginx/Caddy 终结 TLS（浏览器侧 wss://），容器侧仅暴露内网；
@@ -124,7 +132,7 @@ go build -o loadtest ./tools/loadtest
 ## 架构
 
 ```
-cmd/sekiro          入口（config: -port/-debug，对齐 sekiro.port=5612/sekiro.localDebug）
+cmd/sekiro          入口（flag/env 配置，完整清单见根 README）
 Dockerfile/.dockerignore  容器化（多阶段构建，alpine 运行时约 15MB）
 internal/protocol   sekiro01 帧编解码 + 13 种包类型 + MurmurHash2-64
 internal/compress   gzip/snappy/none（仅响应类包、COMPRESS_METHOD 头驱动）
@@ -164,7 +172,7 @@ WS 注册:  /register?group=&clientId=（JSON 文本帧，__sekiro_seq__ 关联�
 
 ## 已知限制（相对商业版/原版）
 
-- 未实现：鉴权（sekiro_token 校验）、集群、admin 管理台（开源版同样不含）
+- 未实现：业务 API 鉴权（`sekiro_token` 校验）、集群、admin 管理台（开源版同样不含）；`/op` 自身可用 `-op-password` 保护
 - Java 版反向代理文档站能力未移植（见差异表）
 - JS/Python 客户端 SDK 联调未做（Java 客户端为生产同源实现，协议风险已覆盖）；
   上线前建议按开发计划 M9 与 Java 版服务端 shadow 对拍、M10 压测

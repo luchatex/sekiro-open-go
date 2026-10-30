@@ -20,6 +20,18 @@ GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o sekiro ./cmd/se
 
 部署与自检方法见 [deploy/](../deploy/) 与 [go/README.md](../go/README.md)。
 
+## Unreleased（main，待发布）
+
+- 修复断线/重连 Client 残留、未知 group 创建永久 actor、取消不生效等内存与
+  goroutine 生命周期问题；空池退避与二进制 invoker 现可被调用方取消。
+- 修复断线清理阻塞 group actor、`attached` 定时器竞态、空分段 pending 残留、
+  HTTP 响应与 gzip 关闭竞态。
+- 加固 gzip/snappy 解压预算：不再按不可信 gzip ISIZE 预分配；OP 登录/kick
+  增加 body 读超时、JSON Content-Type 校验、可信代理 IP 判断和 TLS Secure Cookie。
+- nginx 示例启用 upstream keepalive，修正 `/op` upstream 引用与重复 location。
+- Docker 编排增加可配置内存硬限制、`GOMEMLIMIT`/`GOGC` 基线和 json-file
+  日志轮转；`docker run` 示例同步对应参数。
+
 ## v1.0.0
 
 首个正式版本，涵盖：

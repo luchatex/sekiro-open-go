@@ -70,7 +70,7 @@ HTTP API 全路径错误语义逐字段一致、成功路径逐字节一致。
 ## 快速开始
 
 ```bash
-# 方式一：源码构建（Go 1.22+，外部依赖仅 coder/websocket 与 golang/snappy）
+# 方式一：源码构建（Go 1.27+，外部依赖仅 coder/websocket 与 golang/snappy）
 git clone https://github.com/luchatex/sekiro-open-go.git
 cd sekiro-open-go/go
 make build                      # 产出 bin/sekiro

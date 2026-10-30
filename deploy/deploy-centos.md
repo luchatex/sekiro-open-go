@@ -84,6 +84,8 @@ systemctl status sekiro
 | `-log-level warn` | `SEKIRO_LOG_LEVEL=warn` | `info` | 日志级别 debug/info/warn/error。内部部署建议 warn：关掉逐笔调用 Info 日志（调用记录在 /op 监控页仍可查），日志量降到近零增长 |
 | `-op-disable` | `SEKIRO_OP_DISABLE=true` | 关 | 关闭 `/op` 监控页与 `/op/api/stats` |
 | `-op-password xxx` | `SEKIRO_OP_PASSWORD=xxx` | 空 | `/op` 监控路径访问密码：浏览器登录（12h 会话），连续输错 3 次锁定来源 IP 2 分钟。空 = 无鉴权；systemd 部署建议写进 `Environment=` 而非 ExecStart（避免 `ps` 可见明文密码） |
+| `-tls-cert/-tls-key` | `SEKIRO_TLS_CERT/KEY` | 空 | 同时提供则启用独立 TLS/wss 监听 |
+| `-tls-port` | `SEKIRO_TLS_PORT` | `5613` | TLS/wss 监听端口 |
 
 示例：`SEKIRO_PORT=5612 SEKIRO_LOG_LEVEL=warn /opt/sekiro/sekiro`。
 默认（非 debug）只记 `group`/`action`，业务参数不落盘。
