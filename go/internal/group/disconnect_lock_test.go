@@ -28,10 +28,15 @@ type blockingSink struct {
 	mu        sync.Mutex
 	once      sync.Once
 	enterOnce sync.Once
+	releaseOn sync.Once
 }
 
 func newBlockingSink(d time.Duration) *blockingSink {
 	return &blockingSink{release: make(chan struct{}), entered: make(chan struct{}), blockFor: d}
+}
+
+func (s *blockingSink) releaseNow() {
+	s.releaseOn.Do(func() { close(s.release) })
 }
 
 func (s *blockingSink) RespondCommon(int, string, string, int32) {
@@ -115,11 +120,7 @@ func TestDisconnectSlowConsumerDoesNotBlockGroupActor(t *testing.T) {
 	waitActor()
 
 	slow := newBlockingSink(1500 * time.Millisecond)
-	t.Cleanup(func() {
-		if slow.release != nil {
-			close(slow.release)
-		}
-	})
+	t.Cleanup(slow.releaseNow)
 	c.ForwardInvoke(NewRecord(orderedjson.New(), slow, -1, 10*time.Second))
 	disconnected := make(chan struct{})
 	go func() {
@@ -143,8 +144,7 @@ func TestDisconnectSlowConsumerDoesNotBlockGroupActor(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 		t.Fatal("慢消费方阻塞了 group actor")
 	}
-	close(slow.release)
-	slow.release = nil
+	slow.releaseNow()
 	select {
 	case <-disconnected:
 	case <-time.After(time.Second):

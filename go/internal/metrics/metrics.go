@@ -12,6 +12,7 @@ package metrics
 import (
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -106,13 +107,15 @@ func New() *Recorder {
 		reasons: make(map[string]*reasonStat)}
 }
 
-var def = New()
+var def atomic.Pointer[Recorder]
+
+func init() { def.Store(New()) }
 
 // Default 进程级默认记录器（服务埋点使用；测试请用 New 独立实例）。
-func Default() *Recorder { return def }
+func Default() *Recorder { return def.Load() }
 
-// Reset 重置默认记录器（仅测试用）。
-func Reset() { def = New() }
+// Reset 原子替换默认记录器（仅测试用）。
+func Reset() { def.Store(New()) }
 
 // Invoke 调用入口：记总量、请求流量与 QPS 秒桶。
 func (r *Recorder) Invoke(group, action string, bytesIn int64) {

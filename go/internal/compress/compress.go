@@ -139,8 +139,8 @@ func (Gzip) Decompress(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if n > MaxDecompressedBytes {
-		return nil, tooLargeErr("gzip", len(data), MaxDecompressedBytes)
+	if n > maxStreamBytes {
+		return nil, tooLargeErr("gzip", len(data), maxStreamBytes)
 	}
 	return out, nil
 }

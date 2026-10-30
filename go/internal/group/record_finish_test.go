@@ -1,10 +1,12 @@
 package group
 
 import (
+	"bytes"
 	"log/slog"
 	"testing"
 	"time"
 
+	"sekiro-go/internal/metrics"
 	"sekiro-go/internal/orderedjson"
 	"sekiro-go/internal/protocol"
 )
@@ -139,5 +141,48 @@ func TestEmptyFlaggedSegmentTerminatesRecord(t *testing.T) {
 	defer sink.mu.Unlock()
 	if len(sink.common) != 0 {
 		t.Fatalf("空终结包之后仍触发 timeout: %+v", sink.common)
+	}
+}
+
+// mutatingSink 模拟 invokerSink：转发时原地压缩 p.Data。
+type mutatingSink struct{ *fakeSink }
+
+func (s *mutatingSink) RespondPacket(p *protocol.Packet) {
+	p.Data = []byte("compressed")
+	s.fakeSink.RespondPacket(p)
+}
+
+// TestMetricUsesLogicalBytesBeforeSinkMutation 指标必须在 sink 改写 p.Data
+// 之前采集，否则 invoker 通道会把压缩后字节记成逻辑流量，并误判 status。
+func TestMetricUsesLogicalBytesBeforeSinkMutation(t *testing.T) {
+	m := newTestManager()
+	defer m.Close()
+	g := m.GetOrCreate("metric-logical")
+	c := NewClient(newFakeTransport(), g, "client-a", slog.Default())
+
+	params := orderedjson.New()
+	params.Set(protocol.ParamGroup, "g-metric")
+	params.Set(protocol.ParamAction, "a")
+	mtr := metrics.New()
+	rec := NewRecord(params, &mutatingSink{fakeSink: newFakeSink()}, -1, time.Second)
+	rec.Meter = mtr
+	rec.attached(c, 1)
+
+	logical := bytes.Repeat([]byte("x"), 1000)
+	rec.deliver(&protocol.Packet{
+		Type: protocol.STypeInvokeResponse, Seq: 1,
+		Headers: protocol.NewHeaders(), Data: logical,
+	})
+
+	snap := mtr.Snapshot(nil, nil)
+	if len(snap.Groups) != 1 {
+		t.Fatalf("groups = %d, want 1", len(snap.Groups))
+	}
+	wantKB := float64(len(logical)) / 1024
+	if got := snap.Groups[0].Metrics.BytesOutKB; got != wantKB {
+		t.Fatalf("bytesOutKB = %v, want logical %v (sink mutation leaked into metric)", got, wantKB)
+	}
+	if got := snap.Groups[0].Metrics.Success; got != 1 {
+		t.Fatalf("success = %d, want 1", got)
 	}
 }

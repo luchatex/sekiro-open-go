@@ -210,7 +210,7 @@ func TestReconnectChurnDoesNotRetainClients(t *testing.T) {
 		g.register(c)
 		g.unregister(c)
 	}
-	waitActor()
+	syncActor(g)
 	if got := len(g.rotate); got != 0 {
 		t.Fatalf("断线重连后 rotate 保留 %d 个历史 Client，want 0", got)
 	}
@@ -495,6 +495,14 @@ func TestConsistentDistribution(t *testing.T) {
 			t.Fatalf("consistent hash unstable: %s vs %s", got.ID, first.ID)
 		}
 	}
+}
+
+// syncActor 用 actor 队列屏障建立 happens-before；测试不得用 Sleep
+// 后直接读取 actor 私有状态（-race 会判数据竞争）。
+func syncActor(g *Group) {
+	done := make(chan struct{}, 1)
+	g.post(func() { done <- struct{}{} })
+	<-done
 }
 
 func waitActor() { time.Sleep(50 * time.Millisecond) }

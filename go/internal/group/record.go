@@ -267,17 +267,20 @@ func (r *Record) deliver(p *protocol.Packet) {
 		clientID = c.ID
 	}
 	p.AddHeader(protocol.HeaderClientID, clientID)
+	// 指标先取逻辑值：invokerSink 会原地压缩 p.Data，写入后再读会把
+	// 压缩后字节当逻辑出流量，并可能把压缩流前 4 字节误判为 status。
+	kind := r.resultKind(p)
+	logicalBytes := int64(len(p.Data))
 	r.sink.RespondPacket(p)
 
 	// 指标埋点：终结包按 status 分类计数；分段流中间包只累加响应流量。
-	// 必须在响应写完之后采集（finishMetric 需读 sink 的实际出站字节计数，
-	// 提前调用会漏掉本包的压缩后字节）
+	// 实际出站字节由 finishMetric 从 sink 的 WireBytes 单独采集。
 	if r.Meter != nil {
 		if finish {
-			r.finishMetric(r.resultKind(p), int64(len(p.Data)))
-		} else if len(p.Data) > 0 {
+			r.finishMetric(kind, logicalBytes)
+		} else if logicalBytes > 0 {
 			g, a := r.metricKeys()
-			r.Meter.AddOut(g, a, int64(len(p.Data)))
+			r.Meter.AddOut(g, a, logicalBytes)
 		}
 	}
 }

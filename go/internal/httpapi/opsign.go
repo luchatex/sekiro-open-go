@@ -38,8 +38,7 @@ type opAuth struct {
 	password string
 
 	mu      sync.Mutex
-	window  time.Time // 上次 sweep 时刻
-	swept   bool
+	window  time.Time            // 上次 sweep 时刻
 	session map[string]time.Time // token → 过期时刻
 	fails   map[string]*opFail   // ip → 失败状态
 }
@@ -54,7 +53,6 @@ func newOpAuth(password string) *opAuth {
 	return &opAuth{
 		password: password,
 		window:   time.Now(),
-		swept:    true,
 		session:  make(map[string]time.Time),
 		fails:    make(map[string]*opFail),
 	}
@@ -181,6 +179,7 @@ func (a *opAuth) newSession() string {
 	tok := hex.EncodeToString(b)
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.sweepLocked() // 登录成功也触发过期会话清理，避免 session map 无界增长
 	a.session[tok] = time.Now().Add(opSessionTTL)
 	return tok
 }
@@ -290,6 +289,11 @@ func (a *opAuth) handleOpLogin(w http.ResponseWriter, r *http.Request) {
 
 // logout 会话撤销（可选端点 /op/api/logout）。
 func (a *opAuth) handleOpLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
 	if c, err := r.Cookie(cookieName); err == nil {
 		a.mu.Lock()
 		delete(a.session, c.Value)

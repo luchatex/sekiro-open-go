@@ -105,6 +105,33 @@ func TestGzipForgedISizeDoesNotPreallocate(t *testing.T) {
 	}
 }
 
+// TestGzipUsesRuntimeStreamLimit 防止 Decompress 用 MaxDecompressedBytes
+// 判断而绕过 maxStreamBytes（测试注入/未来可配置限额时必须一致）。
+func TestGzipUsesRuntimeStreamLimit(t *testing.T) {
+	orig := maxStreamBytes
+	maxStreamBytes = 1 << 20
+	t.Cleanup(func() {
+		maxStreamBytes = orig
+		inFlight.Store(0)
+	})
+
+	data := bytes.Repeat([]byte("A"), 2<<20)
+	enc, err := Gzip{}.Compress(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := (Gzip{}).Decompress(enc)
+	if !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("err = %v, want ErrTooLarge", err)
+	}
+	if out != nil {
+		t.Fatalf("oversize result must be nil, got %d bytes", len(out))
+	}
+	if got := inFlight.Load(); got != 0 {
+		t.Fatalf("budget leak: %d", got)
+	}
+}
+
 // TestReadChunkedStopsAtLimit 精确验证「读取量有界」这一核心不变式。
 //
 // 不用 HeapAlloc 采样做断言（受 GC 时机影响，并发下噪声可达 2 倍）：

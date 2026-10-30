@@ -170,6 +170,36 @@ func TestSecureCookieDirectTLS(t *testing.T) {
 	}
 }
 
+// TestOpNewSessionSweepsExpired 新登录也要触发过期会话清理，
+// 避免只有登录成功、从不失败时 session map 无界增长。
+func TestOpNewSessionSweepsExpired(t *testing.T) {
+	a := newTestAuth(t)
+	a.mu.Lock()
+	a.window = time.Now().Add(-2 * opSweepInterval)
+	a.session["expired"] = time.Now().Add(-time.Hour)
+	a.mu.Unlock()
+
+	tok := a.newSession()
+	a.mu.Lock()
+	_, expired := a.session["expired"]
+	_, current := a.session[tok]
+	a.mu.Unlock()
+	if expired || !current {
+		t.Fatalf("expired=%v current=%v, want false/true", expired, current)
+	}
+}
+
+// TestOpLogoutRequiresPOST 防止 GET 触发会话撤销（CSRF logout）。
+func TestOpLogoutRequiresPOST(t *testing.T) {
+	a := newTestAuth(t)
+	r := httptest.NewRequest(http.MethodGet, "/op/api/logout", nil)
+	w := httptest.NewRecorder()
+	a.handleOpLogout(w, r)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET logout = %d, want 405", w.Code)
+	}
+}
+
 // TestOpAuthGateOnHandler 端到端：配置密码后 /op 与 /op/api/* 全部 401，
 // 登录后放行；业务路径不受影响。
 func TestOpAuthGateOnHandler(t *testing.T) {

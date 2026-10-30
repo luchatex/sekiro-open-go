@@ -137,11 +137,11 @@ func (c *Channel) heartbeatLoop() {
 
 func (c *Channel) writePacket(p *protocol.Packet) error {
 	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	c.lastWrite.Store(time.Now().UnixNano())
 	_ = c.conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
 	err := protocol.WritePacket(c.conn, p)
 	_ = c.conn.SetWriteDeadline(time.Time{})
-	c.writeMu.Unlock()
 	if err != nil {
 		// 写失败是连接死亡的权威信号；立即转 dead 并关闭，不能等下一次读超时。
 		c.dead.Store(true)
