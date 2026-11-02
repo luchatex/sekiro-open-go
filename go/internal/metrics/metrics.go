@@ -3,8 +3,10 @@
 //   - 指标维度：总量、成功量、失败量（provider 返回失败）、系统错误（服务端
 //     拦截/超时）、流量（In/Out，字节）、成功率
 //   - 统计粒度：group / action 两级
-//   - 时间精度：小时桶（内存保留最近 48 小时，写路径惰性清理），
-//     天精度在快照时由小时桶按本地时区聚合派生（对齐官方"小时累加、按天聚合"）
+//   - 时间精度：小时桶（保留 26h，覆盖「按小时 · 24h」图）与天桶（保留 7 天，
+//     覆盖「按天 · 7d」图）各存一份，写路径惰性清理。
+//     天桶不能靠小时桶现算：那样小时桶就得留满 7 天，单维度桶数 168 个、
+//     内存是 36 个桶方案的 4 倍以上；两份窄桶的代价只是一次额外 map 查找
 //
 // 与官方差异：开源版无持久化存储，数据仅存内存（进程重启清零）。
 package metrics
@@ -77,7 +79,8 @@ type key struct{ group, action string }
 
 type entity struct {
 	m        Metrics
-	hours    map[int64]*Metrics // unixHour（UTC）→ 该小时累计
+	hours    map[int64]*Metrics // unixHour（UTC）→ 该小时累计，保留 26h
+	days     map[int64]*Metrics // 本地 0 点 unix 秒 → 该天累计，保留 7 天
 	reasons  map[string]int64   // 系统错误原因 → 计数（仅 SysErr 写入）
 	lastSeen int64              // 最近写入 unix 秒；用于淘汰已静默维度
 }
@@ -123,14 +126,16 @@ func (r *Recorder) Invoke(group, action string, bytesIn int64) {
 		return
 	}
 	now := time.Now()
+	h, d := now.Unix()/3600, dayKey(now)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	e := r.entityLocked(group, action)
-	h := now.Unix() / 3600
 	e.m.Total++
 	e.m.BytesIn += bytesIn
-	e.hourLocked(h).Total++
-	e.hourLocked(h).BytesIn += bytesIn
+	e.touchLocked(h, d, func(b *Metrics) {
+		b.Total++
+		b.BytesIn += bytesIn
+	})
 	// QPS 环形秒桶
 	i := now.Unix() % 60
 	if r.secs[i].unix != now.Unix() {
@@ -147,12 +152,13 @@ func (r *Recorder) Finish(group, action string, k Kind, bytesOut, wireOut int64)
 	if r == nil || group == "" {
 		return
 	}
-	h := time.Now().Unix() / 3600
+	now := time.Now()
+	h, d := now.Unix()/3600, dayKey(now)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	e := r.entityLocked(group, action)
 	e.m.addResult(k, bytesOut, wireOut)
-	e.hourLocked(h).addResult(k, bytesOut, wireOut)
+	e.touchLocked(h, d, func(b *Metrics) { b.addResult(k, bytesOut, wireOut) })
 }
 
 // AddOut 仅累加响应流量（分段流中间包：有字节产出但未终结调用）。
@@ -160,25 +166,27 @@ func (r *Recorder) AddOut(group, action string, bytesOut int64) {
 	if r == nil || group == "" || bytesOut <= 0 {
 		return
 	}
-	h := time.Now().Unix() / 3600
+	now := time.Now()
+	h, d := now.Unix()/3600, dayKey(now)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	e := r.entityLocked(group, action)
 	e.m.BytesOut += bytesOut
-	e.hourLocked(h).BytesOut += bytesOut
+	e.touchLocked(h, d, func(b *Metrics) { b.BytesOut += bytesOut })
 }
 
 func (r *Recorder) entityLocked(group, action string) *entity {
 	k := key{group, action}
 	e, ok := r.ents[k]
 	if !ok {
-		e = &entity{hours: make(map[int64]*Metrics)}
+		e = &entity{hours: make(map[int64]*Metrics), days: make(map[int64]*Metrics)}
 		r.ents[k] = e
 	}
 	e.lastSeen = time.Now().Unix()
 	return e
 }
 
+// hourLocked 小时桶（按需创建）。
 func (e *entity) hourLocked(h int64) *Metrics {
 	agg, ok := e.hours[h]
 	if !ok {
@@ -188,27 +196,66 @@ func (e *entity) hourLocked(h int64) *Metrics {
 	return agg
 }
 
-// gcLocked 每 gcEvery 次写清理过期小时桶与长期静默的 group/action 维度。
+// dayLocked 天桶（按需创建）。
+func (e *entity) dayLocked(d int64) *Metrics {
+	agg, ok := e.days[d]
+	if !ok {
+		agg = &Metrics{}
+		e.days[d] = agg
+	}
+	return agg
+}
+
+// touchLocked 对同一时刻的小时桶与天桶施加同一变更，保证两个维度口径一致。
+// 天桶独立存放而非由小时桶现算：否则小时桶必须留满 7 天才能画出「按天 · 7d」。
+func (e *entity) touchLocked(h, d int64, fn func(*Metrics)) {
+	fn(e.hourLocked(h))
+	fn(e.dayLocked(d))
+}
+
+// dayKey 时刻所属「本地天」的键（本地 0 点 unix 秒），与 dayRange 同口径。
+func dayKey(t time.Time) int64 {
+	return localDayStart(t).Unix()
+}
+
+// gcLocked 每 gcEvery 次写清理过期桶与长期静默的 group/action 维度。
 // 原条件 e.m.Total==0 对正常维度永远不成立，任意随机 action 会永久驻留；
-// 维度整体静默 48h 后删除，与小时桶保留窗口一致。
+// 维度整体静默后删除，与桶保留窗口一致。
 const (
-	gcEvery       = 1024
-	entityIdleTTL = 48 * time.Hour
+	gcEvery = 1024
+	// hourRetention 小时桶保留窗口：只需覆盖「按小时 · 24h」图与 group 的
+	// 24h sparkline，多留 2h 容错（GC 每 1024 次写才跑一次）。
+	hourRetention = 26 * time.Hour
+	// dayRetentionDays 天桶保留天数：覆盖「按天 · 7d」图，多留 1 天容错。
+	dayRetentionDays = 8
+	// entityIdleTTL 维度静默淘汰时长：不得短于天桶窗口，否则维度被淘汰会
+	// 连带丢掉仍在图上的历史天桶与累计总量（7 天图上突然归零）。
+	entityIdleTTL = 7 * 24 * time.Hour
 )
+
+// hourRetentionHours 小时桶保留窗口（小时数）。
+const hourRetentionHours = int64(hourRetention / time.Hour)
 
 func (r *Recorder) gcLocked(nowHour int64) {
 	r.writes++
 	if r.writes%gcEvery != 0 {
 		return
 	}
-	now := time.Now().Unix()
+	now := time.Now()
+	// 天桶按本地 0 点对齐：早于「今天 - dayRetentionDays」的整日删除
+	dayCutoff := localDayStart(now).AddDate(0, 0, -dayRetentionDays).Unix()
 	for k, e := range r.ents {
 		for h := range e.hours {
-			if h < nowHour-48 {
+			if h < nowHour-hourRetentionHours {
 				delete(e.hours, h)
 			}
 		}
-		if now-e.lastSeen >= int64(entityIdleTTL/time.Second) {
+		for d := range e.days {
+			if d < dayCutoff {
+				delete(e.days, d)
+			}
+		}
+		if now.Unix()-e.lastSeen >= int64(entityIdleTTL/time.Second) {
 			delete(r.ents, k)
 		}
 	}
@@ -315,6 +362,7 @@ func (r *Recorder) Snapshot(clients func(group string) int, registered []string)
 	type agg struct {
 		m       Metrics
 		hours   map[int64]*Metrics
+		days    map[int64]*Metrics
 		action  map[string]Metrics
 		reasons map[string]int64
 	}
@@ -324,8 +372,8 @@ func (r *Recorder) Snapshot(clients func(group string) int, registered []string)
 	for k, e := range r.ents {
 		g := groups[k.group]
 		if g == nil {
-			g = &agg{hours: make(map[int64]*Metrics), action: make(map[string]Metrics),
-				reasons: make(map[string]int64)}
+			g = &agg{hours: make(map[int64]*Metrics), days: make(map[int64]*Metrics),
+				action: make(map[string]Metrics), reasons: make(map[string]int64)}
 			groups[k.group] = g
 		}
 		g.m.add2(&e.m)
@@ -338,9 +386,24 @@ func (r *Recorder) Snapshot(clients func(group string) int, registered []string)
 			}
 			g.hours[h].add2(m)
 		}
+		for d, m := range e.days {
+			if g.days[d] == nil {
+				g.days[d] = &Metrics{}
+			}
+			g.days[d].add2(m)
+		}
 		am := g.action[k.action]
 		am.add2(&e.m)
 		g.action[k.action] = am
+	}
+	// 全局原因分布直接取全局聚合：它不仅含各 group 的条目，还含 group 为空的
+	// 错误（如调用方断连的 caller-abort）。若由 group 级求和，会漏掉后者，
+	// 导致 /op/api/stats 的 sysErrReasons 之和小于 /op/api/errors 的 total。
+	if len(r.reasons) > 0 {
+		snap.SysErrReasons = make(map[string]int64, len(r.reasons))
+		for reason, rs := range r.reasons {
+			snap.SysErrReasons[reason] = rs.count
+		}
 	}
 	r.mu.Unlock()
 
@@ -351,7 +414,8 @@ func (r *Recorder) Snapshot(clients func(group string) int, registered []string)
 	// 保证「client 注册后」监控页立即可见
 	for _, name := range registered {
 		if _, ok := groups[name]; !ok {
-			groups[name] = &agg{hours: make(map[int64]*Metrics), action: make(map[string]Metrics)}
+			groups[name] = &agg{hours: make(map[int64]*Metrics), days: make(map[int64]*Metrics),
+				action: make(map[string]Metrics)}
 		}
 	}
 
@@ -370,12 +434,6 @@ func (r *Recorder) Snapshot(clients func(group string) int, registered []string)
 		}
 		if len(g.reasons) > 0 {
 			gj.SysErrReasons = g.reasons
-			if snap.SysErrReasons == nil {
-				snap.SysErrReasons = make(map[string]int64)
-			}
-			for reason, n := range g.reasons {
-				snap.SysErrReasons[reason] += n
-			}
 		}
 		if clients != nil {
 			gj.Clients = clients(name)
@@ -405,17 +463,18 @@ func (r *Recorder) Snapshot(clients func(group string) int, registered []string)
 			allHours[h].add2(m)
 		}
 	}
-	snap.Hourly = buildSeries(allHours, hourIDs)
-	// 天桶：小时桶按本地时区归到所属天
-	days := make(map[int64]*Metrics)
-	for h, m := range allHours {
-		d := localDayStart(time.Unix(h*3600, 0)).Unix()
-		if days[d] == nil {
-			days[d] = &Metrics{}
+	snap.Hourly = buildSeries(allHours, hourIDs, 3600) // 小时序号 → unix 秒
+	// 天序列：直接聚合各 group 的天桶（写路径已按本地天归好，无需再从小时桶换算）
+	allDays := make(map[int64]*Metrics)
+	for _, g := range groups {
+		for d, m := range g.days {
+			if allDays[d] == nil {
+				allDays[d] = &Metrics{}
+			}
+			allDays[d].add2(m)
 		}
-		days[d].add2(m)
 	}
-	snap.Daily = buildSeries(days, dayBuckets)
+	snap.Daily = buildSeries(allDays, dayBuckets, 1) // 天桶键已是 unix 秒
 	return snap
 }
 
@@ -460,19 +519,23 @@ func bucketValues(hours map[int64]*Metrics, buckets []int64, pick func(*Metrics)
 	return out
 }
 
-// buildSeries 查询用小时序号 ids；对外 Buckets 统一输出 unix 秒（小时桶 ×3600），
-// 保证与 daily 的天桶（本地 0 点 unix 秒）单位一致，前端直接 new Date(b*1000)。
-func buildSeries(hours map[int64]*Metrics, ids []int64) *SeriesJSON {
+// buildSeries 按桶 id 取值生成序列。ids 是查询键：小时维度为小时序号
+// （unix 秒 / 3600），天维度为本地 0 点 unix 秒；unit 负责把 id 换算成
+// 对外的 unix 秒。两者单位必须统一成 unix 秒，前端才能直接 new Date(b*1000)。
+//
+// 注意 unit 不能写死 3600：天桶的 id 本身已是 unix 秒，再乘 3600 会让
+// 前端把天标签渲染成 2174 年（数值正确、时间轴全错）。
+func buildSeries(agg map[int64]*Metrics, ids []int64, unit int64) *SeriesJSON {
 	buckets := make([]int64, len(ids))
 	for i, id := range ids {
-		buckets[i] = id * 3600
+		buckets[i] = id * unit
 	}
 	return &SeriesJSON{
 		Buckets: buckets,
-		Total:   bucketValues(hours, ids, func(m *Metrics) int64 { return m.Total }),
-		Success: bucketValues(hours, ids, func(m *Metrics) int64 { return m.Success }),
-		Fail:    bucketValues(hours, ids, func(m *Metrics) int64 { return m.Fail }),
-		SysErr:  bucketValues(hours, ids, func(m *Metrics) int64 { return m.SysErr }),
+		Total:   bucketValues(agg, ids, func(m *Metrics) int64 { return m.Total }),
+		Success: bucketValues(agg, ids, func(m *Metrics) int64 { return m.Success }),
+		Fail:    bucketValues(agg, ids, func(m *Metrics) int64 { return m.Fail }),
+		SysErr:  bucketValues(agg, ids, func(m *Metrics) int64 { return m.SysErr }),
 	}
 }
 

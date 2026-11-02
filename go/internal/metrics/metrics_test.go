@@ -92,7 +92,8 @@ func TestHourlyAndDailySeries(t *testing.T) {
 	r.Invoke("g", "a", 0)
 	r.mu.Lock()
 	e := r.entityLocked("g", "a")
-	e.hourLocked(curH-25).Total++
+	e.hourLocked(curH-25).Total++                                    // 小时桶：超出 24 桶窗口
+	e.dayLocked(localDayStart(now).AddDate(0, 0, -1).Unix()).Total++ // 天桶：昨天的 1 条
 	r.mu.Unlock()
 
 	snap := r.Snapshot(nil, nil)
@@ -163,9 +164,120 @@ func TestIdleEntityEvicted(t *testing.T) {
 	_, live := r.ents[key{"live", "a"}]
 	r.mu.Unlock()
 	if stale {
-		t.Fatal("静默超过 48h 的 group/action 维度未被淘汰")
+		t.Fatal("静默超过保留窗口的 group/action 维度未被淘汰")
 	}
 	if !live {
 		t.Fatal("活跃维度被误删")
+	}
+}
+
+// 序列桶必须统一是 unix 秒：小时桶为整点，天桶为本地 0 点。
+// 回归背景：buildSeries 曾对天桶也乘 3600，天图时间轴被渲染成 2174 年。
+func TestSeriesBucketsAreUnixSeconds(t *testing.T) {
+	r := New()
+	r.Invoke("g", "a", 0)
+	now := time.Now()
+	snap := r.Snapshot(nil, nil)
+
+	hour := snap.Hourly.Buckets[len(snap.Hourly.Buckets)-1]
+	if want := now.Unix() / 3600 * 3600; hour != want {
+		t.Fatalf("hourly 末桶 = %d, want %d（整点 unix 秒）", hour, want)
+	}
+	for _, b := range snap.Hourly.Buckets {
+		if b <= 0 || b > now.Unix()+3600 {
+			t.Fatalf("hourly 桶 %d 不是合理的 unix 秒", b)
+		}
+	}
+
+	day := snap.Daily.Buckets[len(snap.Daily.Buckets)-1]
+	if want := localDayStart(now).Unix(); day != want {
+		t.Fatalf("daily 末桶 = %d, want %d（本地 0 点 unix 秒）", day, want)
+	}
+	for _, b := range snap.Daily.Buckets {
+		if b <= 0 || b > now.Unix()+1 {
+			t.Fatalf("daily 桶 %d 不是合理的 unix 秒（疑似被乘了 3600）", b)
+		}
+		if y := time.Unix(b, 0).Year(); y != now.Year() {
+			t.Fatalf("daily 桶 %d 落在 %d 年，want %d 年", b, y, now.Year())
+		}
+	}
+}
+
+// 小时桶与天桶的保留窗口相互独立：小时只覆盖 24h 图（26h 预算），天覆盖 7d 图。
+// 不能用「小时桶留满 7 天、天桶现算」的方式实现——那会把单维度桶数从 34 拉到
+// 168，内存放大约 4 倍。这条断言同时是内存预算的护栏。
+func TestRetentionBudget(t *testing.T) {
+	if hourRetentionHours < 24 || hourRetentionHours > 30 {
+		t.Fatalf("小时桶保留 %dh：需覆盖 24h 图，且不应超出太多", hourRetentionHours)
+	}
+	if dayRetentionDays < 7 {
+		t.Fatalf("天桶保留 %d 天：需覆盖 7d 图", dayRetentionDays)
+	}
+	if total := hourRetentionHours + int64(dayRetentionDays); total > 40 {
+		t.Fatalf("单维度桶预算 %d 超出 40 个（内存放大的主要来源）", total)
+	}
+}
+
+func TestHourAndDayBucketsPrunedIndependently(t *testing.T) {
+	r := New()
+	now := time.Now()
+	curH := now.Unix() / 3600
+	today := localDayStart(now)
+	d6 := today.AddDate(0, 0, -6).Unix() // 6 天前：仍在 7 天窗口
+	d9 := today.AddDate(0, 0, -9).Unix() // 9 天前：超出窗口
+
+	r.Invoke("g", "a", 0)
+	r.mu.Lock()
+	e := r.entityLocked("g", "a")
+	e.hourLocked(curH-30).Total++ // 30h 前：超出小时窗口
+	e.dayLocked(d6).Total++       // 6 天前的天桶
+	e.dayLocked(d9).Total++       // 9 天前的天桶
+	r.writes = gcEvery - 1
+	r.mu.Unlock()
+
+	r.Invoke("g", "a", 0) // 触发惰性 GC
+	r.mu.Lock()
+	_, hourKept := e.hours[curH-30]
+	_, dayKept := e.days[d6]
+	_, dayDropped := e.days[d9]
+	r.mu.Unlock()
+	if hourKept {
+		t.Fatal("30h 前的小时桶未被清理")
+	}
+	if !dayKept {
+		t.Fatal("6 天前的天桶被误删（7d 图会缺数据）")
+	}
+	if dayDropped {
+		t.Fatal("9 天前的天桶未被清理")
+	}
+
+	// 天序列求和应覆盖这 6 天前的数据
+	var sum int64
+	for _, v := range r.Snapshot(nil, nil).Daily.Total {
+		sum += v
+	}
+	if sum != 3 {
+		t.Fatalf("daily sum = %d, want 3（当前 2 条 + 6 天前 1 条）", sum)
+	}
+}
+
+// 全局原因分布必须包含 group 为空的错误，口径与 /op/api/errors 的 total 一致。
+func TestGlobalReasonsIncludeGroupless(t *testing.T) {
+	r := New()
+	r.RecordSysErr("g1", "a1", ErrTimeout, "timeout", "c1", "http")
+	r.RecordSysErr("", "", ErrAbort, "", "", "http") // 调用方断连：无 group
+	snap := r.Snapshot(nil, nil)
+	if snap.SysErrReasons[ErrAbort] != 1 {
+		t.Fatalf("global reasons = %v，无 group 的 caller-abort 被漏计", snap.SysErrReasons)
+	}
+	if e := r.Errors(); e.Total != 2 {
+		t.Fatalf("errors total = %d, want 2", e.Total)
+	}
+	var sum int64
+	for _, n := range snap.SysErrReasons {
+		sum += n
+	}
+	if sum != 2 {
+		t.Fatalf("全局原因求和 = %d, want 2（应与 /op/api/errors total 一致）", sum)
 	}
 }

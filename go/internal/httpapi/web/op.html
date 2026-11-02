@@ -232,7 +232,7 @@ a { color: var(--accent); text-decoration: none; }
      流量 Out 双口径：<strong>逻辑</strong> = 协议 payload（压缩前）；
      <strong>实际</strong> = HTTP 消费方压缩后实测出站字节（WS permessage-deflate /
      native 通道消费方暂不统计，显示 –）。In 按请求 query+body 累计。
-     数据存内存，重启清零；小时桶保留 48h，天精度由小时桶聚合。</p>
+     数据存内存，重启清零；小时桶保留 26h，天桶保留 7 天。</p>
   <p>sekiro-go · 开源版监控（对齐官方商业版报表口径）· API：<a href="/op/api/stats" target="_blank">/op/api/stats</a>
      · <a href="/op/api/clients" target="_blank">/op/api/clients</a>
      · <a href="/op/api/errors" target="_blank">/op/api/errors</a></p>

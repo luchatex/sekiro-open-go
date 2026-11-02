@@ -42,8 +42,9 @@ http://127.0.0.1:5612/op
 - **系统错误分析**：原因分布（timeout / dispatch-failed / caller-abort）+ 最近 100 条事件
   （时间/group/action/详情/clientId/通道），定位「系统错误 N 条」的具体构成
 - **数据 API**：`/op/api/stats`、`/op/api/clients`、`/op/api/errors` 返回 JSON 快照（可自建报表/对接 Grafana JSON datasource）
-- **实现**：`internal/metrics` 内存统计（小时桶保留 48h、天精度由小时桶按本地时区聚合），
-  进程重启清零、无持久化；埋点覆盖 HTTP 与二进制 invoker 两条消费通道
+- **实现**：`internal/metrics` 内存统计（小时桶保留 26h、天桶保留 7 天，两份窄桶独立存储，
+  每维度桶数 34 个，而非把小时桶留满 7 天的 168 个），进程重启清零、无持久化；
+  埋点覆盖 HTTP 与二进制 invoker 两条消费通道
 - **开关**：`-op-disable` 或环境变量 `SEKIRO_OP_DISABLE=true` 关闭页面与 API
 - **密码保护**（v1.0.0+）：`-op-password` 或环境变量 `SEKIRO_OP_PASSWORD` 启用
   `/op` 与 `/op/api/*` 的登录访问——浏览器打开后弹出密码框，登录成功下发
