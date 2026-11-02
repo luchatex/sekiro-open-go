@@ -129,8 +129,8 @@ a { color: var(--accent); text-decoration: none; }
   <span class="meta" id="skew" hidden></span>
   <label class="meta">刷新
     <select id="interval">
-      <option value="2000" selected>2s</option>
-      <option value="5000">5s</option>
+      <option value="2000">2s</option>
+      <option value="5000" selected>5s</option>
       <option value="10000">10s</option>
       <option value="0">暂停</option>
     </select>
@@ -554,7 +554,37 @@ const ERR_REASON_DESC = {
   "dispatch-failed": "分配失败/上游丢失：空池、无设备、group 缺失、上游连接断开等（细分看下方事件详情）",
   "caller-abort": "调用方（HTTP/WS 消费方）提前断开连接，未等到响应",
 };
+const ERR_REASON_NAME = {
+  "timeout": "上游超时",
+  "dispatch-failed": "分配失败",
+  "caller-abort": "调用方断连",
+};
 const ERR_REASON_CLS = { "timeout": "b-warn", "dispatch-failed": "b-bad", "caller-abort": "" };
+
+// 原因徽标：中文名为主，保留英文原因码便于与日志/Grafana 对齐
+function reasonBadge(code) {
+  const zh = ERR_REASON_NAME[code] || code;
+  const raw = ERR_REASON_NAME[code] ? `<span class="meta" style="margin-left:6px">${esc(code)}</span>` : "";
+  return `<span class="badge ${ERR_REASON_CLS[code] || ""}">${esc(zh)}</span>${raw}`;
+}
+
+// 事件详情为服务端固定文案（与 Java 原版对齐，接口保持英文原样），
+// 仅在展示层译成中文；未命中的文案原样显示，避免漏掉新文案。
+const ERR_MSG_ZH = [
+  [/^no device found for clientId:(.*)$/, (m) => `该 clientId 无在线设备（${m[1]}）`],
+  [/^pool queue empty$/, () => "组内暂无可分配设备（空池）"],
+  [/^sekiro upstream lose connection$/, () => "上游连接已断开"],
+  [/^write request to broken upstream:\s*(.*)$/, (m) => `向上游写请求失败（${m[1]}）`],
+  [/^timeout$/, () => "等待上游响应超时"],
+];
+function errMsgZh(msg) {
+  if (!msg) return "–";
+  for (const [re, fn] of ERR_MSG_ZH) {
+    const m = msg.match(re);
+    if (m) return fn(m);
+  }
+  return msg;
+}
 const fmtAgoSec = (sec) => sec ? fmtAgo(new Date(sec * 1000).toISOString()) : "–";
 
 async function pollErrors() {
@@ -572,7 +602,7 @@ function renderErrors(d) {
   let rh = "";
   for (const r of reasons) {
     rh += `<tr>
-      <td class="tl"><span class="badge ${ERR_REASON_CLS[r.reason] || ""}">${esc(r.reason)}</span></td>
+      <td class="tl">${reasonBadge(r.reason)}</td>
       <td class="tl">${esc(ERR_REASON_DESC[r.reason] || "–")}</td>
       <td>${r.count}</td>
       <td class="tl" title="${r.lastTime}">${fmtAgoSec(r.lastTime)}</td>
@@ -585,8 +615,8 @@ function renderErrors(d) {
       <td class="tl" title="${e.time}">${fmtAgoSec(e.time)}</td>
       <td class="tl">${esc(e.group || "–")}</td>
       <td class="tl">${esc(e.action || "–")}</td>
-      <td class="tl"><span class="badge ${ERR_REASON_CLS[e.reason] || ""}">${esc(e.reason)}</span></td>
-      <td class="tl">${esc(e.message || "–")}</td>
+      <td class="tl">${reasonBadge(e.reason)}</td>
+      <td class="tl" title="${esc(e.message || "")}">${esc(errMsgZh(e.message))}</td>
       <td class="tl">${esc(e.clientId || "–")}</td>
       <td>${esc(e.channel || "–")}</td>
     </tr>`;
@@ -622,9 +652,9 @@ $("granSeg").querySelectorAll("button").forEach((b) => {
   });
 });
 
-poll();
-pollNodes();
-timer = setInterval(() => { poll(); pollNodes(); }, 2000);
+// 首屏即按页头选定的间隔开始轮询（默认 5s）；未登录时首个请求拿到 401，
+// 弹登录框，登录成功后 handleLogin 会再调一次 startPolling 重置定时器。
+startPolling(+$("interval").value);
 </script>
 </body>
 </html>

@@ -342,6 +342,12 @@ type Snapshot struct {
 	Daily         *SeriesJSON      `json:"daily"`  // 最近 7 天桶（本地时区）
 }
 
+// 监控页的展示窗口（与 op.html 的两个按钮一致）。
+const (
+	windowHours = 24 // 「按小时 · 24h」
+	windowDays  = 7  // 「按天 · 7d」
+)
+
 // Snapshot 生成全量快照：hourly 为最近 24 个小时桶、daily 为最近 7 天桶。
 // clients 参数提供各 group 在线 client 数（可为 nil）；
 // registered 参数为 group 注册表中的全部 group 名（可为 nil）——
@@ -359,21 +365,29 @@ func (r *Recorder) Snapshot(clients func(group string) int, registered []string)
 		QPS:        r.QPS(),
 	}
 
+	hourIDs := bucketRange(now.Unix()/3600, windowHours) // 当前小时 + 前 23（小时序号）
+	dayBuckets := dayRange(now, windowDays)              // 天桶直接用 unix 秒
+	hourFirst := hourIDs[0]
+
+	// 聚合时只用「窗口内的桶」：group 的 sparkline 只要 24 个小时 total，
+	// 顶层序列要 24 小时 + 7 天的完整指标。用定长数组按下标累加，
+	// 不再为每个 group 的每个桶 new 一个 Metrics——那是快照分配的大头
+	// （20 group × 34 桶 ≈ 84 KB/次，占整体七成）。
 	type agg struct {
 		m       Metrics
-		hours   map[int64]*Metrics
-		days    map[int64]*Metrics
+		series  [windowHours]int64 // 该 group 最近 24 小时 total（sparkline）
 		action  map[string]Metrics
 		reasons map[string]int64
 	}
 	groups := make(map[string]*agg)
+	var allHours [windowHours]Metrics
+	var allDays [windowDays]Metrics
 
 	r.mu.Lock()
 	for k, e := range r.ents {
 		g := groups[k.group]
 		if g == nil {
-			g = &agg{hours: make(map[int64]*Metrics), days: make(map[int64]*Metrics),
-				action: make(map[string]Metrics), reasons: make(map[string]int64)}
+			g = &agg{action: make(map[string]Metrics), reasons: make(map[string]int64)}
 			groups[k.group] = g
 		}
 		g.m.add2(&e.m)
@@ -381,16 +395,17 @@ func (r *Recorder) Snapshot(clients func(group string) int, registered []string)
 			g.reasons[reason] += n
 		}
 		for h, m := range e.hours {
-			if g.hours[h] == nil {
-				g.hours[h] = &Metrics{}
+			idx := int(h - hourFirst)
+			if idx < 0 || idx >= windowHours {
+				continue // 窗口外（惰性 GC 尚未清掉的旧桶）
 			}
-			g.hours[h].add2(m)
+			g.series[idx] += m.Total
+			allHours[idx].add2(m)
 		}
 		for d, m := range e.days {
-			if g.days[d] == nil {
-				g.days[d] = &Metrics{}
+			if idx := dayIndexOf(d, dayBuckets[0], windowDays); idx >= 0 {
+				allDays[idx].add2(m)
 			}
-			g.days[d].add2(m)
 		}
 		am := g.action[k.action]
 		am.add2(&e.m)
@@ -407,15 +422,11 @@ func (r *Recorder) Snapshot(clients func(group string) int, registered []string)
 	}
 	r.mu.Unlock()
 
-	hourIDs := bucketRange(now.Unix()/3600, 24) // 当前小时 + 前 23（小时序号，用于桶查询）
-	dayBuckets := dayRange(now, 7)              // 天桶直接用 unix 秒
-
 	// 注册表中尚无调用流量的 group：补进聚合（零指标），
 	// 保证「client 注册后」监控页立即可见
 	for _, name := range registered {
 		if _, ok := groups[name]; !ok {
-			groups[name] = &agg{hours: make(map[int64]*Metrics), days: make(map[int64]*Metrics),
-				action: make(map[string]Metrics)}
+			groups[name] = &agg{action: make(map[string]Metrics)}
 		}
 	}
 
@@ -425,12 +436,13 @@ func (r *Recorder) Snapshot(clients func(group string) int, registered []string)
 	}
 	sort.Strings(gnames)
 
+	snap.Groups = make([]GroupJSON, 0, len(gnames))
 	for _, name := range gnames {
 		g := groups[name]
 		gj := GroupJSON{
 			Group:   name,
 			Metrics: toMetricJSON(g.m),
-			Series:  bucketValues(g.hours, hourIDs, func(m *Metrics) int64 { return m.Total }),
+			Series:  g.series[:], // 定长数组直接切片，零分配（快照只读）
 		}
 		if len(g.reasons) > 0 {
 			gj.SysErrReasons = g.reasons
@@ -438,43 +450,18 @@ func (r *Recorder) Snapshot(clients func(group string) int, registered []string)
 		if clients != nil {
 			gj.Clients = clients(name)
 		}
+		gj.Actions = make([]ActionJSON, 0, len(g.action))
 		for _, a := range sortedKeys(g.action) {
 			gj.Actions = append(gj.Actions, ActionJSON{
 				Action:  a,
 				Metrics: toMetricJSON(g.action[a]),
 			})
 		}
-		if gj.Actions == nil {
-			gj.Actions = []ActionJSON{}
-		}
 		snap.Groups = append(snap.Groups, gj)
 	}
-	if snap.Groups == nil {
-		snap.Groups = []GroupJSON{}
-	}
 
-	// 顶层序列：聚合全部 group 的小时桶
-	allHours := make(map[int64]*Metrics)
-	for _, g := range groups {
-		for h, m := range g.hours {
-			if allHours[h] == nil {
-				allHours[h] = &Metrics{}
-			}
-			allHours[h].add2(m)
-		}
-	}
-	snap.Hourly = buildSeries(allHours, hourIDs, 3600) // 小时序号 → unix 秒
-	// 天序列：直接聚合各 group 的天桶（写路径已按本地天归好，无需再从小时桶换算）
-	allDays := make(map[int64]*Metrics)
-	for _, g := range groups {
-		for d, m := range g.days {
-			if allDays[d] == nil {
-				allDays[d] = &Metrics{}
-			}
-			allDays[d].add2(m)
-		}
-	}
-	snap.Daily = buildSeries(allDays, dayBuckets, 1) // 天桶键已是 unix 秒
+	snap.Hourly = buildSeries(hourIDs, 3600, allHours[:]) // 小时序号 → unix 秒
+	snap.Daily = buildSeries(dayBuckets, 1, allDays[:])   // 天桶键已是 unix 秒
 	return snap
 }
 
@@ -495,6 +482,18 @@ func bucketRange(curHour int64, n int) []int64 {
 	return out
 }
 
+// dayIndexOf 把天桶键（本地 0 点 unix 秒）换算成窗口下标；窗口外返回 -1。
+// 加半天再整除：夏令时切换日相邻两天相差 23/25 小时，四舍五入仍落到正确格子。
+func dayIndexOf(d, first int64, n int) int {
+	if d < first {
+		return -1
+	}
+	if idx := int((d - first + 43200) / 86400); idx < n {
+		return idx
+	}
+	return -1
+}
+
 // dayRange 最近 n 天的"天桶"（本地时区当天 0 点 unix 秒）。
 func dayRange(now time.Time, n int) []int64 {
 	out := make([]int64, n)
@@ -509,34 +508,30 @@ func localDayStart(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
 }
 
-func bucketValues(hours map[int64]*Metrics, buckets []int64, pick func(*Metrics) int64) []int64 {
-	out := make([]int64, len(buckets))
-	for i, b := range buckets {
-		if m := hours[b]; m != nil {
-			out[i] = pick(m)
+// buildSeries 由「窗口内定长桶数组」生成序列：vals[i] 对应 buckets[i]。
+// unit 负责把桶键换算成对外的 unix 秒（小时序号 ×3600；天桶键本身已是秒）。
+//
+// 注意 unit 不能写死 3600：天桶的键是 unix 秒，再乘 3600 会让前端把天标签
+// 渲染成 2174 年（数值正确、时间轴全错）。
+func buildSeries(buckets []int64, unit int64, vals []Metrics) *SeriesJSON {
+	n := len(buckets)
+	out := &SeriesJSON{
+		Buckets: make([]int64, n),
+		Total:   make([]int64, n),
+		Success: make([]int64, n),
+		Fail:    make([]int64, n),
+		SysErr:  make([]int64, n),
+	}
+	for i := 0; i < n; i++ {
+		out.Buckets[i] = buckets[i] * unit
+		if i < len(vals) {
+			out.Total[i] = vals[i].Total
+			out.Success[i] = vals[i].Success
+			out.Fail[i] = vals[i].Fail
+			out.SysErr[i] = vals[i].SysErr
 		}
 	}
 	return out
-}
-
-// buildSeries 按桶 id 取值生成序列。ids 是查询键：小时维度为小时序号
-// （unix 秒 / 3600），天维度为本地 0 点 unix 秒；unit 负责把 id 换算成
-// 对外的 unix 秒。两者单位必须统一成 unix 秒，前端才能直接 new Date(b*1000)。
-//
-// 注意 unit 不能写死 3600：天桶的 id 本身已是 unix 秒，再乘 3600 会让
-// 前端把天标签渲染成 2174 年（数值正确、时间轴全错）。
-func buildSeries(agg map[int64]*Metrics, ids []int64, unit int64) *SeriesJSON {
-	buckets := make([]int64, len(ids))
-	for i, id := range ids {
-		buckets[i] = id * unit
-	}
-	return &SeriesJSON{
-		Buckets: buckets,
-		Total:   bucketValues(agg, ids, func(m *Metrics) int64 { return m.Total }),
-		Success: bucketValues(agg, ids, func(m *Metrics) int64 { return m.Success }),
-		Fail:    bucketValues(agg, ids, func(m *Metrics) int64 { return m.Fail }),
-		SysErr:  bucketValues(agg, ids, func(m *Metrics) int64 { return m.SysErr }),
-	}
 }
 
 func emptySeries(n int) *SeriesJSON {

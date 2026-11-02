@@ -39,8 +39,10 @@ http://127.0.0.1:5612/op
 - **KPI 总览**：group 数、在线 client 数、QPS（1 分钟均值）、累计调用、成功率、流量 In/Out
 - **趋势图**：按小时（24h）/ 按天（7d）切换，SVG 堆叠柱（成功/失败/系统错误三色）
 - **group 明细表**：六指标 + 24h sparkline，点击行展开 action 子表
-- **系统错误分析**：原因分布（timeout / dispatch-failed / caller-abort）+ 最近 100 条事件
-  （时间/group/action/详情/clientId/通道），定位「系统错误 N 条」的具体构成
+- **系统错误分析**：原因分布（超时 / 分配失败 / 调用方断连，码值 `timeout` /
+  `dispatch-failed` / `caller-abort` 一并显示）+ 最近 100 条事件
+  （时间/group/action/详情/clientId/通道），定位「系统错误 N 条」的具体构成；
+  事件详情在展示层译成中文，接口仍返回英文原文（与 Java 版文案对齐）
 - **数据 API**：`/op/api/stats`、`/op/api/clients`、`/op/api/errors` 返回 JSON 快照（可自建报表/对接 Grafana JSON datasource）
 - **实现**：`internal/metrics` 内存统计（小时桶保留 26h、天桶保留 7 天，两份窄桶独立存储，
   每维度桶数 34 个，而非把小时桶留满 7 天的 168 个），进程重启清零、无持久化；
