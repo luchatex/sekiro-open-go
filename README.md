@@ -77,7 +77,7 @@ make build                      # 产出 bin/sekiro
 ./bin/sekiro -port 5612         # 默认端口与原版一致
 
 # 方式二：Docker（拉取预构建镜像，多架构 amd64/arm64，随版本发布更新）
-# 发布流水线生成语义化标签 1.0.1 / 1.0；生产建议固定完整版本，不依赖可变的 latest。
+# 发布流水线生成语义化标签 1.0.3 / 1.0；生产建议固定完整版本，不依赖可变的 latest。
 # --memory-swap 与 --memory 相等 = 容器不使用 swap；
 # json-file 不配置 max-size 会无限增长，docker run 部署必须显式带上。
 docker run -d --name sekiro -p 5612:5612 --restart unless-stopped \
@@ -85,7 +85,7 @@ docker run -d --name sekiro -p 5612:5612 --restart unless-stopped \
   --log-driver=json-file --log-opt max-size=50m --log-opt max-file=3 \
   -e GOMEMLIMIT=3GiB -e GOGC=100 \
   -e SEKIRO_OP_PASSWORD='监控密码' \
-  ghcr.io/luchatex/sekiro-open-go:1.0.2
+  ghcr.io/luchatex/sekiro-open-go:1.0.3
 
 # 方式三：本地构建镜像
 docker compose up -d --build    # 编排在仓库根目录，多阶段构建，alpine 约 15MB
@@ -142,6 +142,7 @@ sekiro-open-go/
 ├── tests/                   # 真实客户端联调（官方 Java SDK demo / Python / JS 回归脚本）
 ├── deploy/                  # 反代配置（nginx / Caddy）、CentOS 部署与日志管理指南
 ├── release/                 # 版本发布说明（产物由 Actions 自动构建发布）
+├── CHANGELOG.md             # 版本变更日志
 ├── docker-compose.yml
 └── README.md
 ```
@@ -185,10 +186,11 @@ make race    # 竞态检测（Linux/WSL）
 创建 Release 并上传产物与 SHA256SUMS.txt）：
 
 ```bash
-git tag v1.0.1 && git push origin v1.0.1
+git tag v1.0.3 && git push origin v1.0.3
 ```
 
-历史版本见 [Releases](https://github.com/luchatex/sekiro-open-go/releases)。
+变更明细见 [CHANGELOG.md](CHANGELOG.md)，产物下载见
+[Releases](https://github.com/luchatex/sekiro-open-go/releases)。
 
 ## License
 

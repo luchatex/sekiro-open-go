@@ -6,7 +6,7 @@
 不再本地手工出包。
 
 ```bash
-git tag v1.0.2 && git push origin v1.0.2   # 自动构建并发布
+git tag v1.0.3 && git push origin v1.0.3   # 自动构建并发布
 ```
 
 本地构建（调试/自用，非发布途径）：
@@ -20,48 +20,9 @@ GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o sekiro ./cmd/se
 
 部署与自检方法见 [deploy/](../deploy/) 与 [go/README.md](../go/README.md)。
 
-## v1.0.2（2026-10-30）
+## 历史版本
 
-发布镜像：`ghcr.io/luchatex/sekiro-open-go:1.0.2`（同时生成 `1.0`）。
-在 v1.0.1 基础上的稳定性修复：
+各版本变更明细（含镜像标签与修复清单）统一维护在
+[CHANGELOG.md](../CHANGELOG.md)，此处不再重复，避免两处记录漂移。
 
-- 修复二进制 invoker 响应被原地压缩后，指标把压缩字节误记为逻辑出流量、
-  并可能误判 `status` 的问题。
-- 修复 gzip 流式解压上限与运行时限额判据不一致的问题，超限始终返回错误，
-  不再出现 `(nil, nil)`。
-- OP 登录成功也触发过期会话清理；`/op/api/logout` 限定 POST。
-- native 写路径改为 defer 解锁，避免异常时永久持有写锁。
-- 默认 metrics 实例改为原子替换；修复 Go CI `-race` 发现的测试同步问题，
-  并消除 `/op` 指标测试的异步时序抖动。
-
-## v1.0.1（2026-10-30）
-
-发布镜像：`ghcr.io/luchatex/sekiro-open-go:1.0.1`（同时生成 `1.0`）。
-发布流水线只生成语义化标签，不覆盖 `latest`；生产请固定完整版本。
-
-缺陷修复版本：
-
-- 修复断线/重连 Client 残留、未知 group 创建永久 actor、取消不生效等内存与
-  goroutine 生命周期问题；空池退避与二进制 invoker 现可被调用方取消。
-- 修复断线清理阻塞 group actor、`attached` 定时器竞态、空分段 pending 残留、
-  HTTP 响应与 gzip 关闭竞态。
-- 加固 gzip/snappy 解压预算：不再按不可信 gzip ISIZE 预分配；OP 登录/kick
-  增加 body 读超时、JSON Content-Type 校验、可信代理 IP 判断和 TLS Secure Cookie。
-- nginx 示例启用 upstream keepalive，修正 `/op` upstream 引用与重复 location。
-- Docker 编排增加可配置内存硬限制、`GOMEMLIMIT`/`GOGC` 基线和 json-file
-  日志轮转；`docker run` 示例同步对应参数。
-
-## v1.0.0
-
-首个正式版本，涵盖：
-
-- 与原 Java 版兼容的线上协议（HTTP / WebSocket / native 三通道）
-- 监控报表 `/op`（含 `-op-password` 登录保护）
-- 出流量按压缩后实际字节统计
-- 修复原版 WebSocket 分片场景下的 UTF-8 解码乱码
-
-单静态二进制、无 JVM 依赖。各平台产物与校验清单 `SHA256SUMS.txt` 见
-[Releases 页面](https://github.com/luchatex/sekiro-open-go/releases)。
-
-后续版本沿用语义化版本：缺陷修复升 patch（`v1.0.1`），新增特性升 minor
-（`v1.1.0`）。
+版本号沿用语义化版本：缺陷修复升 patch（`v1.0.3`），新增特性升 minor（`v1.1.0`）。
