@@ -102,12 +102,19 @@ type Recorder struct {
 	reasons map[string]*reasonStat
 	ring    [errRingCap]SysErrEvent
 	ringN   int64 // 累计写入数（取模定位）
+
+	// 错误聚合视图（见 errors.go）：按 group/action/原因聚合，避免翻事件流
+	aggs map[aggKey]*aggStat
+	// 迟到响应（超时后 provider 才回包）：按 group/action 聚合
+	lates map[key]*lateStat
 }
 
 // New 创建记录器。
 func New() *Recorder {
 	return &Recorder{started: time.Now(), ents: make(map[key]*entity),
-		reasons: make(map[string]*reasonStat)}
+		reasons: make(map[string]*reasonStat),
+		aggs:    make(map[aggKey]*aggStat),
+		lates:   make(map[key]*lateStat)}
 }
 
 var def atomic.Pointer[Recorder]
@@ -259,6 +266,8 @@ func (r *Recorder) gcLocked(nowHour int64) {
 			delete(r.ents, k)
 		}
 	}
+	// 错误聚合视图与 entity 同频清理（24h 未再发生即无排障价值）
+	r.pruneLocked(now.Unix())
 }
 
 // QPS 最近 60 秒平均调用速率。

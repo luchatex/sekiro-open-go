@@ -36,6 +36,15 @@ type Record struct {
 	extendedTil time.Time
 	timer       *time.Timer
 
+	// terminal 终结原因（metrics.ErrTimeout / ErrAbort / ErrDispatch），
+	// 空 = 未终结。用于区分「超时后的迟到回包」与其他终结（迟到响应只对
+	// 超时才有诊断意义：调用方断连/分配失败时 provider 本就不该回包）。
+	terminal string
+	endedAt  time.Time // 终结时刻（迟到延迟的起算点）
+	// lateCounted 分段流的迟到包可能连续到达多条，只按首包计一次迟到，
+	// 否则一个挂死的大响应会把迟到计数刷成几十条。
+	lateCounted bool
+
 	// Meter 可选指标记录器（nil 安全，测试默认不设）：
 	// 终结时按 success/fail/sysErr 分类计数，并累加响应流量。
 	Meter *metrics.Recorder
@@ -79,6 +88,9 @@ func (r *Record) finishMetric(k metrics.Kind, bytesOut int64) {
 
 // finishSysErr 系统错误终结埋点：除计数外携带原因/message/clientId/通道，
 // 供监控页「系统错误分析」聚合与事件列表使用（message 为服务端固定文案）。
+//
+// 参数摘要只在 -op-err-params 开启时采集：超时/分配失败大多源于「某几条
+// 具体请求反复失败」，只有参数能把它指认出来；默认关闭使监控页不含业务数据。
 func (r *Record) finishSysErr(reason, message string) {
 	if r.Meter == nil {
 		return
@@ -88,7 +100,34 @@ func (r *Record) finishSysErr(reason, message string) {
 	if r.invokerSeq >= 0 {
 		channel = "invoker"
 	}
-	r.Meter.RecordSysErr(g, a, reason, message, r.clientID(), channel)
+	var params string
+	if metrics.CaptureParams() {
+		params = paramDigest(r.Params)
+	}
+	r.Meter.RecordSysErr(g, a, reason, message, r.clientID(), channel, params)
+}
+
+// digestSkipKeys 框架键：属协议层（分组/动作/超时/序号），对定位业务请求
+// 无价值且稳定占预算，摘要里剔除。
+var digestSkipKeys = map[string]bool{
+	protocol.ParamGroup:          true,
+	protocol.ParamAction:         true,
+	protocol.ParamBindClient:     true,
+	protocol.ParamConstantInvoke: true,
+	protocol.ParamInvokeTimeout:  true,
+	protocol.WSSeqNumber:         true,
+	protocol.ParamApiToken:       true,
+}
+
+// digestMaxBytes 参数摘要长度上限：够放 URL + 业务 ID，又不至于把大 body
+// 灌进监控页与事件环形缓冲（100 条 × 256B ≈ 25KB）。
+const digestMaxBytes = 256
+
+func paramDigest(p *orderedjson.Map) string {
+	if p == nil {
+		return ""
+	}
+	return p.Digest(func(k string) bool { return digestSkipKeys[k] }, digestMaxBytes)
 }
 
 // attached 写成功后回调（对齐 afterForward）：启动超时定时器。
@@ -131,6 +170,8 @@ func (r *Record) fail(message, clientID string) {
 		return
 	}
 	r.done = true
+	r.terminal = metrics.ErrDispatch
+	r.endedAt = time.Now()
 	if r.timer != nil {
 		r.timer.Stop()
 	}
@@ -159,6 +200,8 @@ func (r *Record) Abort() bool {
 		return false
 	}
 	r.done = true
+	r.terminal = metrics.ErrAbort
+	r.endedAt = time.Now()
 	if r.timer != nil {
 		r.timer.Stop()
 	}
@@ -188,6 +231,8 @@ func (r *Record) onTimeout() {
 		return
 	}
 	r.done = true
+	r.terminal = metrics.ErrTimeout
+	r.endedAt = time.Now()
 	c, seq := r.client, r.seq
 	r.mu.Unlock()
 	if c != nil {
@@ -225,7 +270,22 @@ func (r *Record) clientID() string {
 func (r *Record) deliver(p *protocol.Packet) {
 	r.mu.Lock()
 	if r.done {
+		// 迟到回包：只在「已按超时终结」时计入迟到统计——此时调用方早已
+		// 拿到 timeout，provider 的回包只能丢弃。这条计数是区分「上游只是
+		// 慢」与「上游挂死」的唯一客观依据（见 metrics.RecordLate）。
+		late := r.terminal == metrics.ErrTimeout && !r.lateCounted
+		delay := time.Duration(0)
+		if late {
+			r.lateCounted = true
+			if !r.endedAt.IsZero() {
+				delay = time.Since(r.endedAt)
+			}
+		}
 		r.mu.Unlock()
+		if late && r.Meter != nil {
+			g, a := r.metricKeys()
+			r.Meter.RecordLate(g, a, delay)
+		}
 		return
 	}
 	// 分段流：响应头携带 SEGMENT_STREAM_FLAG=true

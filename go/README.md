@@ -40,20 +40,51 @@ http://127.0.0.1:5612/op
 - **趋势图**：按小时（24h）/ 按天（7d）切换，SVG 堆叠柱（成功/失败/系统错误三色）
 - **group 明细表**：六指标 + 24h sparkline，点击行展开 action 子表
 - **系统错误分析**：原因分布（超时 / 分配失败 / 调用方断连，码值 `timeout` /
-  `dispatch-failed` / `caller-abort` 一并显示）+ 最近 100 条事件
-  （时间/group/action/详情/clientId/通道），定位「系统错误 N 条」的具体构成；
-  事件详情在展示层译成中文，接口仍返回英文原文（与 Java 版文案对齐）
+  `dispatch-failed` / `caller-abort` 一并显示）+ **高频错误聚合**（同 group /
+  action / 原因 归为一行、按次数降序，用于识别「每分钟固定几条」的规律性失败）
+  + 最近 100 条事件（时间/group/action/详情/参数/clientId/通道），定位「系统错误 N 条」
+  的具体构成；事件详情在展示层译成中文，接口仍返回英文原文（与 Java 版文案对齐）
+- **迟到响应**（`lateTotal` / `late`）：服务端已按超时回包后 provider 才到达的响应
+  计数（该响应被丢弃，调用方早已收到 `timeout`）。它是判断「上游只是慢」还是
+  「上游挂死」的唯一客观依据——迟到普遍只差几秒，说明该调大 `invoke_timeout`
+  或修客户端自身超时；迟到在几十秒以上，说明连接已挂死，应断链并让调用方重试
+- **参数摘要**（`-op-err-params`，默认关）：开启后系统错误事件附带请求参数摘要
+  （跳过 `group`/`action`/`invoke_timeout`/`__sekiro_seq__` 等框架键，截断 256B），
+  用于把「反复失败的同一条请求」指认出来。默认关闭，避免爬取 URL / 文书 ID 等
+  业务参数进入监控数据；排障时临时开启重启即可
 - **数据 API**：`/op/api/stats`、`/op/api/clients`、`/op/api/errors` 返回 JSON 快照（可自建报表/对接 Grafana JSON datasource）
 - **实现**：`internal/metrics` 内存统计（小时桶保留 26h、天桶保留 7 天，两份窄桶独立存储，
   每维度桶数 34 个，而非把小时桶留满 7 天的 168 个），进程重启清零、无持久化；
   埋点覆盖 HTTP 与二进制 invoker 两条消费通道
-- **开关**：`-op-disable` 或环境变量 `SEKIRO_OP_DISABLE=true` 关闭页面与 API
+- **开关**：`-op-disable` 或环境变量 `SEKIRO_OP_DISABLE=true` 关闭页面与 API；
+  `-op-err-params`（`SEKIRO_OP_ERR_PARAMS=true`）为系统错误事件附带请求参数摘要
 - **密码保护**（v1.0.0+）：`-op-password` 或环境变量 `SEKIRO_OP_PASSWORD` 启用
   `/op` 与 `/op/api/*` 的登录访问——浏览器打开后弹出密码框，登录成功下发
   12h 会话 Cookie；**连续输错 3 次锁定来源 IP 2 分钟**（期内直接 429）。
   docker compose 在宿主机 `.env` 定义 `OP_PASSWORD` 即生效；未配置密码 =
   与 `/business` API 一致无鉴权，公网部署建议启用或前置网关访问控制
 - **curl 脚本访问**（启用密码时）：先 `curl -c cookie.txt -H 'Content-Type: application/json' -X POST -d '{"password":"xxx"}' http://127.0.0.1:5612/op/api/login`，再 `curl -b cookie.txt http://127.0.0.1:5612/op/api/stats`；登录与踢下线接口只接受 JSON body
+
+## 排障：怎么读「系统错误」
+
+三类原因对应完全不同的处置，按下面顺序看可以省掉大部分猜测：
+
+1. **看高频聚合，先判断是不是「规律性失败」**：若某一行稳定每分钟固定几条
+   （如 `wenshudetail / getDetailData / timeout` 每分钟 4 条），说明是少数请求
+   必然失败，而不是服务端容量或客户端掉线——服务端此时是健康的，问题在
+   「这些请求本身 + 客户端超时兜底」。
+2. **看迟到响应，区分「慢」与「挂死」**：同一批超时若伴随 `late` 计数，
+   且 `maxDelayMs` 只有几秒，说明 provider 只是慢过 `invoke_timeout`（调大超时
+   或修客户端即可）；若迟到延迟到几十秒甚至几分钟，说明客户端请求挂死，
+   应让客户端加 `AbortController`/读超时并在失败后跳过该条目，避免毒丸重放。
+3. **看事件 message 与参数定位具体请求**：`no device found` / `pool queue empty`
+   属客户端重连空窗（调用方做 1–3s×3 次短重试即可自愈）；要指认「哪一条请求
+   在反复失败」，临时加 `-op-err-params` 重启，事件会带上 `params` 摘要，
+   相同参数每分钟重现即是毒丸。
+
+`caller-abort` 单独说明：它表示调用方先断开，通常是调用方 HTTP 超时 **短于**
+`invoke_timeout`（默认 15s）。把调用方超时设到 30s 以上（> 服务端超时 + 余量），
+这类错误才会消失。
 
 ## Docker 部署
 

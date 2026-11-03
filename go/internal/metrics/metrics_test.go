@@ -264,8 +264,8 @@ func TestHourAndDayBucketsPrunedIndependently(t *testing.T) {
 // 全局原因分布必须包含 group 为空的错误，口径与 /op/api/errors 的 total 一致。
 func TestGlobalReasonsIncludeGroupless(t *testing.T) {
 	r := New()
-	r.RecordSysErr("g1", "a1", ErrTimeout, "timeout", "c1", "http")
-	r.RecordSysErr("", "", ErrAbort, "", "", "http") // 调用方断连：无 group
+	r.RecordSysErr("g1", "a1", ErrTimeout, "timeout", "c1", "http", "")
+	r.RecordSysErr("", "", ErrAbort, "", "", "http", "") // 调用方断连：无 group
 	snap := r.Snapshot(nil, nil)
 	if snap.SysErrReasons[ErrAbort] != 1 {
 		t.Fatalf("global reasons = %v，无 group 的 caller-abort 被漏计", snap.SysErrReasons)

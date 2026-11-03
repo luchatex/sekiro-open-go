@@ -210,6 +210,29 @@ a { color: var(--accent); text-decoration: none; }
       </table>
     </div>
     <div style="overflow-x:auto; border-top:1px solid var(--border)">
+      <div class="head" style="padding:12px 18px 6px">
+        <h2 style="font-size:13px">高频错误聚合</h2>
+        <span class="spacer"></span>
+        <span class="meta">同 group / action / 原因 归为一行，按次数降序</span>
+      </div>
+      <table>
+        <thead><tr>
+          <th class="tl" style="width:22%">group</th>
+          <th class="tl">action</th>
+          <th class="tl">原因</th>
+          <th>次数</th>
+          <th class="tl">最近发生</th>
+        </tr></thead>
+        <tbody id="errAggBody"></tbody>
+      </table>
+      <div class="empty" id="errAggEmpty" hidden>暂无聚合数据</div>
+    </div>
+    <div style="overflow-x:auto; border-top:1px solid var(--border)">
+      <div class="head" style="padding:12px 18px 6px">
+        <h2 style="font-size:13px">最近事件</h2>
+        <span class="spacer"></span>
+        <span class="meta" id="errParamHint">–</span>
+      </div>
       <table>
         <thead><tr>
           <th class="tl">时间</th>
@@ -217,6 +240,7 @@ a { color: var(--accent); text-decoration: none; }
           <th class="tl">action</th>
           <th class="tl">原因</th>
           <th class="tl">详情</th>
+          <th class="tl">参数</th>
           <th class="tl">clientId</th>
           <th>通道</th>
         </tr></thead>
@@ -233,6 +257,10 @@ a { color: var(--accent); text-decoration: none; }
      <strong>实际</strong> = HTTP 消费方压缩后实测出站字节（WS permessage-deflate /
      native 通道消费方暂不统计，显示 –）。In 按请求 query+body 累计。
      数据存内存，重启清零；小时桶保留 26h，天桶保留 7 天。</p>
+  <p>系统错误排障：<strong>高频错误聚合</strong>把同 group / action / 原因归为一行，用于识别
+     「每分钟固定几条」的规律性失败；<strong>迟到响应</strong> = 服务端已按超时回包后 provider
+     才到达的响应（仅作诊断，调用方早已收到 timeout）：迟到只差几秒说明上游「慢」，应调大
+     <code>invoke_timeout</code> 或修客户端超时；迟到几十秒以上说明上游「挂死」，应断链并让调用方重试。</p>
   <p>sekiro-go · 开源版监控（对齐官方商业版报表口径）· API：<a href="/op/api/stats" target="_blank">/op/api/stats</a>
      · <a href="/op/api/clients" target="_blank">/op/api/clients</a>
      · <a href="/op/api/errors" target="_blank">/op/api/errors</a></p>
@@ -596,7 +624,20 @@ async function pollErrors() {
 }
 
 function renderErrors(d) {
-  $("errMeta").textContent = `共 ${d.total} 条 · 展示最近 ${d.recent.length} 条`;
+  const late = d.late || [];
+  const lateTotal = d.lateTotal || 0;
+  let maxDelay = 0;
+  for (const l of late) maxDelay = Math.max(maxDelay, l.maxDelayMs || 0);
+  // 迟到响应是判断「上游只是慢」还是「上游挂死」的关键：超时数相同，
+  // 迟到只差几秒 → 该调大 invoke_timeout；迟到几十秒以上 → 挂死，应断链。
+  let meta = `共 ${d.total} 条 · 展示最近 ${d.recent.length} 条`;
+  if (lateTotal > 0) meta += ` · 迟到响应 ${lateTotal} 条（最长 +${(maxDelay / 1000).toFixed(1)}s）`;
+  $("errMeta").textContent = meta;
+
+  $("errParamHint").innerHTML = d.captureParams
+    ? '参数摘要已开启（<code>-op-err-params</code>）'
+    : '参数摘要未开启：加 <code>-op-err-params</code> 重启后，事件将附带请求参数（默认关闭以免业务数据进入监控）';
+
   $("errEmpty").hidden = d.total > 0;
   const reasons = d.reasons || [];
   let rh = "";
@@ -609,6 +650,22 @@ function renderErrors(d) {
     </tr>`;
   }
   $("errReasonsBody").innerHTML = rh;
+
+  // 高频聚合：同一 group/action/原因 一行，直接看出「每分钟固定几条」的规律
+  const aggs = d.byAction || [];
+  $("errAggEmpty").hidden = aggs.length > 0;
+  let ah = "";
+  for (const a of aggs) {
+    ah += `<tr>
+      <td class="tl">${esc(a.group || "–")}</td>
+      <td class="tl">${esc(a.action || "–")}</td>
+      <td class="tl">${reasonBadge(a.reason)}</td>
+      <td>${a.count}</td>
+      <td class="tl" title="${a.lastTime}">${fmtAgoSec(a.lastTime)}</td>
+    </tr>`;
+  }
+  $("errAggBody").innerHTML = ah;
+
   let eh = "";
   for (const e of (d.recent || [])) {
     eh += `<tr>
@@ -617,6 +674,7 @@ function renderErrors(d) {
       <td class="tl">${esc(e.action || "–")}</td>
       <td class="tl">${reasonBadge(e.reason)}</td>
       <td class="tl" title="${esc(e.message || "")}">${esc(errMsgZh(e.message))}</td>
+      <td class="tl" title="${esc(e.params || "")}" style="max-width:280px;overflow:hidden;text-overflow:ellipsis">${esc(e.params || "–")}</td>
       <td class="tl">${esc(e.clientId || "–")}</td>
       <td>${esc(e.channel || "–")}</td>
     </tr>`;

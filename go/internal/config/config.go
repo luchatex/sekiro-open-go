@@ -30,6 +30,11 @@ type Config struct {
 	// OpPassword /op 监控路径访问密码；空 = 不启用鉴权（向后兼容）。
 	// 启用后 /op 与 /op/api/* 需登录会话 Cookie；登录失败 3 次锁定来源 IP 2 分钟。
 	OpPassword string
+	// OpErrParams 系统错误事件附带请求参数摘要（默认关）：
+	// 开启后 /op/api/errors 的事件多一个 params 字段（跳过框架键、截断 256B），
+	// 用于定位「反复失败的同一条请求」。默认关闭以免业务参数（爬取 URL、
+	// 文书 ID 等）进入监控数据。
+	OpErrParams bool
 }
 
 func Load() *Config {
@@ -62,6 +67,9 @@ func Load() *Config {
 	if v := os.Getenv("SEKIRO_OP_PASSWORD"); v != "" {
 		c.OpPassword = v
 	}
+	if v := os.Getenv("SEKIRO_OP_ERR_PARAMS"); v == "true" || v == "1" {
+		c.OpErrParams = true
+	}
 	flag.IntVar(&c.Port, "port", c.Port, "sekiro server listen port")
 	flag.BoolVar(&c.LocalDebug, "debug", c.LocalDebug, "local debug mode")
 	flag.StringVar(&c.LogLevel, "log-level", c.LogLevel, "log level: debug, info, warn or error (default info)")
@@ -70,6 +78,7 @@ func Load() *Config {
 	flag.StringVar(&c.TLSCertKey, "tls-key", c.TLSCertKey, "TLS private key file")
 	flag.IntVar(&c.TLSPort, "tls-port", c.TLSPort, "TLS listen port (wss)")
 	flag.StringVar(&c.OpPassword, "op-password", c.OpPassword, "password for /op monitor paths (empty = no auth)")
+	flag.BoolVar(&c.OpErrParams, "op-err-params", c.OpErrParams, "attach request params digest to system error events (sensitive)")
 	flag.Parse()
 	return c
 }

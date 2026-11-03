@@ -62,6 +62,23 @@ func TestOpErrorsEndpoint(t *testing.T) {
 	if ev.Channel != "http" {
 		t.Fatalf("channel = %q, want http", ev.Channel)
 	}
+	if ev.Params != "" {
+		t.Fatalf("params = %q, want 空（-op-err-params 默认关）", ev.Params)
+	}
+	// 聚合视图与原因分布同源，供监控页「高频错误」表使用
+	if len(e.ByAction) != 1 {
+		t.Fatalf("byAction = %+v, want 1 行", e.ByAction)
+	}
+	if a := e.ByAction[0]; a.Group != "g-err" || a.Action != "crawl" ||
+		a.Reason != metrics.ErrDispatch || a.Count != 1 {
+		t.Fatalf("byAction[0] = %+v", a)
+	}
+	if e.LateTotal != 0 || len(e.Late) != 0 {
+		t.Fatalf("late = %d/%v, want 0（无 provider 回包）", e.LateTotal, e.Late)
+	}
+	if e.CaptureParams {
+		t.Fatal("captureParams 默认应为 false")
+	}
 
 	// stats 快照同步携带原因分布（group 级 + 全局）
 	s := fetchStats(t, h)

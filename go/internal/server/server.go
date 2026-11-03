@@ -23,6 +23,7 @@ import (
 	"sekiro-go/internal/config"
 	"sekiro-go/internal/group"
 	"sekiro-go/internal/httpapi"
+	"sekiro-go/internal/metrics"
 	"sekiro-go/internal/native"
 	"sekiro-go/internal/protocol"
 )
@@ -59,6 +60,9 @@ type Server struct {
 
 func New(cfg *config.Config) (*Server, error) {
 	log := slog.Default()
+	// 错误事件是否附带参数摘要（-op-err-params，默认关）。埋点在 group.Record，
+	// 通过 metrics 包级开关传递，避免为纯观测开关改动调用链签名。
+	metrics.SetCaptureParams(cfg.OpErrParams)
 	s := &Server{
 		cfg:          cfg,
 		mgr:          group.NewManager(log),

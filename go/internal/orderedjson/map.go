@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"unicode/utf8"
 )
 
 type Map struct {
@@ -101,6 +102,39 @@ func (m *Map) String() string {
 		return "{}"
 	}
 	return string(b)
+}
+
+// Digest 生成「键值摘要」：按插入序保留未跳过的键，序列化后截断到 maxBytes
+// （截断点回退到完整 rune，末尾加 …）。用于错误事件附带业务参数，便于定位
+// 反复失败的同一条请求；值超过预算时同样被截断，不会把大 body 灌进监控页。
+//
+// skip 为 nil 表示不过滤。无有效键时返回空串（调用方据此省略字段）。
+func (m *Map) Digest(skip func(k string) bool, maxBytes int) string {
+	if m == nil || maxBytes <= 0 {
+		return ""
+	}
+	sel := New()
+	for i, k := range m.keys {
+		if skip != nil && skip(k) {
+			continue
+		}
+		sel.Set(k, m.vals[i])
+	}
+	if sel.Len() == 0 {
+		return ""
+	}
+	b, err := sel.MarshalJSON()
+	if err != nil {
+		return ""
+	}
+	if len(b) <= maxBytes {
+		return string(b)
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(b[cut]) {
+		cut--
+	}
+	return string(b[:cut]) + "…"
 }
 
 // SetAll 按 src 的插入序并入（已存在覆盖）。
