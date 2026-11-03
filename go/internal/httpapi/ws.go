@@ -307,6 +307,14 @@ func wsHandleMessage(cl *group.Client, tr *wsTransport, data []byte, log *slog.L
 	}
 	msg.Remove(protocol.WSSeqNumber)
 
+	// 序号已不在 pending（超时/断连已终结该调用）：跳过重新序列化直接丢弃。
+	// 大响应（详情页 MB 级）在迟到场景下重新 marshal 一遍毫无意义。
+	if !cl.Pending(int32(seq)) {
+		log.Debug("ws response dropped before marshal (invoke already finished)", "seq", seq)
+		cl.DropLateResponse(int32(seq))
+		return true
+	}
+
 	packet := protocol.NewPacket(protocol.STypeInvokeResponse)
 	packet.Seq = int32(seq)
 	packet.AddHeader(protocol.PayloadContentType, "application/json;charset=utf8")

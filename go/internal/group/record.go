@@ -36,15 +36,6 @@ type Record struct {
 	extendedTil time.Time
 	timer       *time.Timer
 
-	// terminal 终结原因（metrics.ErrTimeout / ErrAbort / ErrDispatch），
-	// 空 = 未终结。用于区分「超时后的迟到回包」与其他终结（迟到响应只对
-	// 超时才有诊断意义：调用方断连/分配失败时 provider 本就不该回包）。
-	terminal string
-	endedAt  time.Time // 终结时刻（迟到延迟的起算点）
-	// lateCounted 分段流的迟到包可能连续到达多条，只按首包计一次迟到，
-	// 否则一个挂死的大响应会把迟到计数刷成几十条。
-	lateCounted bool
-
 	// Meter 可选指标记录器（nil 安全，测试默认不设）：
 	// 终结时按 success/fail/sysErr 分类计数，并累加响应流量。
 	Meter *metrics.Recorder
@@ -170,8 +161,6 @@ func (r *Record) fail(message, clientID string) {
 		return
 	}
 	r.done = true
-	r.terminal = metrics.ErrDispatch
-	r.endedAt = time.Now()
 	if r.timer != nil {
 		r.timer.Stop()
 	}
@@ -200,8 +189,6 @@ func (r *Record) Abort() bool {
 		return false
 	}
 	r.done = true
-	r.terminal = metrics.ErrAbort
-	r.endedAt = time.Now()
 	if r.timer != nil {
 		r.timer.Stop()
 	}
@@ -231,14 +218,16 @@ func (r *Record) onTimeout() {
 		return
 	}
 	r.done = true
-	r.terminal = metrics.ErrTimeout
-	r.endedAt = time.Now()
 	c, seq := r.client, r.seq
 	r.mu.Unlock()
 	if c != nil {
 		c.mu.Lock()
 		delete(c.pending, seq)
 		c.mu.Unlock()
+		// 登记迟到序号：provider 之后若回包，通道层据此计入迟到统计
+		// （区分「上游慢」与「上游挂死」的唯一客观依据）。
+		_, action := r.metricKeys()
+		c.trackLateTimeout(seq, action)
 	}
 	r.sink.RespondCommon(-1, "timeout", r.clientID(), r.commonSeq())
 	r.finishSysErr(metrics.ErrTimeout, "timeout") // provider 未在超时内回包
@@ -270,22 +259,10 @@ func (r *Record) clientID() string {
 func (r *Record) deliver(p *protocol.Packet) {
 	r.mu.Lock()
 	if r.done {
-		// 迟到回包：只在「已按超时终结」时计入迟到统计——此时调用方早已
-		// 拿到 timeout，provider 的回包只能丢弃。这条计数是区分「上游只是
-		// 慢」与「上游挂死」的唯一客观依据（见 metrics.RecordLate）。
-		late := r.terminal == metrics.ErrTimeout && !r.lateCounted
-		delay := time.Duration(0)
-		if late {
-			r.lateCounted = true
-			if !r.endedAt.IsZero() {
-				delay = time.Since(r.endedAt)
-			}
-		}
+		// 已终结：迟到的分段包直接丢弃。迟到统计不在这里做——超时会把
+		// record 从 pending 摘除，这类包根本走不到 deliver，实际入口是
+		// Client.DropLateResponse（按序号反查超时表）。
 		r.mu.Unlock()
-		if late && r.Meter != nil {
-			g, a := r.metricKeys()
-			r.Meter.RecordLate(g, a, delay)
-		}
 		return
 	}
 	// 分段流：响应头携带 SEGMENT_STREAM_FLAG=true

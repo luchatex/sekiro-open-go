@@ -198,6 +198,12 @@ func (c *Channel) readLoop() {
 			}
 			switch p.Type {
 			case protocol.CTypeInvokeResponse:
+				// 序号已被超时/断连摘除：本条响应无人消费，解压等于白烧 CPU
+				// （响应体可达 MB 级，迟到包还要先完整解压再丢弃）。
+				if !c.client.Pending(p.Seq) {
+					c.client.DropLateResponse(p.Seq)
+					continue
+				}
 				// 解压（响应类包按 COMPRESS_METHOD 头，对齐 NettyDecompressHandler）
 				if err := c.comp.DecompressPacket(p); err != nil {
 					c.log.Warn("decompress failed", "err", err)

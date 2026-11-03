@@ -5,6 +5,10 @@ package group
 // 线上排障实证：某 group 每分钟固定 4 条 getDetailData 超时、持续 30 分钟，
 // 仅凭 timeout 计数无法区分「上游慢过阈值」与「上游挂死」。迟到响应统计给出
 // 客观依据；参数摘要用于把「反复失败的同一条请求」指认出来。
+//
+// 迟到统计的入口不是 Record.deliver：超时会把 record 从 pending 摘除，
+// 迟到的包根本走不到 deliver，只能由 Client 按序号反查超时表（见
+// Client.trackLateTimeout / DropLateResponse）。此处用真实路由路径验证。
 
 import (
 	"log/slog"
@@ -17,51 +21,51 @@ import (
 	"sekiro-go/internal/protocol"
 )
 
-// 超时终结后 provider 才回包：计一次迟到，且回包被丢弃（sink 不再收到包）。
-func TestLateResponseCountedAfterTimeout(t *testing.T) {
+// 超时终结后 provider 才回包：计一次迟到（多包只计首包），且不写 sink。
+func TestLateResponseCountedOnceAfterTimeout(t *testing.T) {
+	metrics.Reset()
 	m := newTestManager()
 	defer m.Close()
 	g := m.GetOrCreate("late-group")
 	c := NewClient(newFakeTransport(), g, "client-a", slog.Default())
 
+	sink := newFakeSink()
 	params := orderedjson.New()
 	params.Set(protocol.ParamGroup, "late-group")
 	params.Set(protocol.ParamAction, "getDetailData")
-
-	sink := newFakeSink()
-	mtr := metrics.New()
 	rec := NewRecord(params, sink, -1, time.Hour)
-	rec.Meter = mtr
+	rec.Meter = metrics.Default()
 	rec.attached(c, 3)
+	c.mu.Lock()
+	c.pending[3] = rec
+	c.mu.Unlock()
 
 	rec.onTimeout() // 直接触发超时路径，避免用例等待 15s
-	rec.deliver(&protocol.Packet{Type: protocol.STypeInvokeResponse, Seq: 3,
-		Headers: protocol.NewHeaders(), Data: []byte(`{"late":1}`)})
-	// 分段流可能连来多包：只按首包计一次迟到
-	rec.deliver(&protocol.Packet{Type: protocol.STypeInvokeResponse, Seq: 3,
-		Headers: protocol.NewHeaders(), Data: []byte(`{"late":2}`)})
+
+	late := &protocol.Packet{Type: protocol.STypeInvokeResponse, Seq: 3,
+		Headers: protocol.NewHeaders(), Data: []byte(`{"late":1}`)}
+	c.HandleResponse(late)
+	c.HandleResponse(late) // 分段流的后续包不应重复计数
 
 	if n := len(sink.packets); n != 0 {
 		t.Fatalf("迟到回包写入了 sink %d 次，应为 0（调用方已收到 timeout）", n)
 	}
-	e := mtr.Errors()
+	e := metrics.Default().Errors()
 	if e.LateTotal != 1 {
 		t.Fatalf("lateTotal = %d, want 1（多包只计首包）", e.LateTotal)
 	}
-	if len(e.Late) != 1 || e.Late[0].Group != "late-group" || e.Late[0].Action != "getDetailData" {
+	if len(e.Late) != 1 || e.Late[0].Group != "late-group" ||
+		e.Late[0].Action != "getDetailData" {
 		t.Fatalf("late 聚合 = %+v", e.Late)
 	}
-	if e.Late[0].MaxDelayMs < 0 {
-		t.Fatalf("maxDelayMs 不应为负: %d", e.Late[0].MaxDelayMs)
-	}
-	// 迟到不计入系统错误（调用结果早已按 timeout 记过）
 	if e.Total != 1 {
 		t.Fatalf("errors total = %d, want 1（仅 timeout 那条）", e.Total)
 	}
 }
 
-// 调用方断连后 provider 回包不是「迟到」：没有诊断价值，也不应污染迟到计数。
+// 调用方断连后的回包不是「迟到」：没有诊断价值，也不应污染迟到计数。
 func TestLateResponseNotCountedAfterAbort(t *testing.T) {
+	metrics.Reset()
 	m := newTestManager()
 	defer m.Close()
 	g := m.GetOrCreate("abort-group")
@@ -70,20 +74,62 @@ func TestLateResponseNotCountedAfterAbort(t *testing.T) {
 	params := orderedjson.New()
 	params.Set(protocol.ParamGroup, "abort-group")
 	params.Set(protocol.ParamAction, "search")
-
-	mtr := metrics.New()
 	rec := NewRecord(params, newFakeSink(), -1, time.Hour)
-	rec.Meter = mtr
+	rec.Meter = metrics.Default()
 	rec.attached(c, 4)
+	c.mu.Lock()
+	c.pending[4] = rec
+	c.mu.Unlock()
 
 	if !rec.Abort() {
 		t.Fatal("Abort 未赢得终结")
 	}
-	rec.deliver(&protocol.Packet{Type: protocol.STypeInvokeResponse, Seq: 4,
+	c.HandleResponse(&protocol.Packet{Type: protocol.STypeInvokeResponse, Seq: 4,
 		Headers: protocol.NewHeaders(), Data: []byte("x")})
 
-	if got := mtr.Errors().LateTotal; got != 0 {
+	if got := metrics.Default().Errors().LateTotal; got != 0 {
 		t.Fatalf("lateTotal = %d, want 0（caller-abort 后的回包不算迟到）", got)
+	}
+}
+
+// 未知序号（客户端自造 / 服务端重启前的旧响应）既不计数也不 panic。
+func TestLateResponseUnknownSeqIgnored(t *testing.T) {
+	metrics.Reset()
+	m := newTestManager()
+	defer m.Close()
+	g := m.GetOrCreate("unknown-group")
+	c := NewClient(newFakeTransport(), g, "client-a", slog.Default())
+
+	c.HandleResponse(&protocol.Packet{Type: protocol.STypeInvokeResponse, Seq: 999,
+		Headers: protocol.NewHeaders(), Data: []byte("x")})
+
+	if got := metrics.Default().Errors().LateTotal; got != 0 {
+		t.Fatalf("lateTotal = %d, want 0", got)
+	}
+}
+
+// 迟到表必须有界：异常流量（例如全局超时）下不得无界增长。
+func TestLateTrackBounded(t *testing.T) {
+	m := newTestManager()
+	defer m.Close()
+	g := m.GetOrCreate("bound-group")
+	c := NewClient(newFakeTransport(), g, "client-a", slog.Default())
+
+	for i := int32(1); i <= lateTrackCap*3; i++ {
+		c.trackLateTimeout(i, "act")
+	}
+	c.lateMu.Lock()
+	n := len(c.lateSeqs)
+	c.lateMu.Unlock()
+	if n > lateTrackCap {
+		t.Fatalf("迟到表条目 %d，超过上限 %d", n, lateTrackCap)
+	}
+	// 淘汰按插入序：最新的仍在，最旧的已被丢弃
+	if _, _, ok := c.takeLate(lateTrackCap * 3); !ok {
+		t.Fatal("最新序号不应被淘汰")
+	}
+	if _, _, ok := c.takeLate(1); ok {
+		t.Fatal("最旧序号应已被淘汰")
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"sekiro-go/internal/metrics"
 	"sekiro-go/internal/orderedjson"
 	"sekiro-go/internal/protocol"
 )
@@ -40,7 +41,26 @@ type Client struct {
 	mu      sync.Mutex
 	pending map[int32]*Record
 
+	// lateSeqs 已按超时清理的序号：provider 迟到的回包要靠它才知道「这条曾经
+	// 是什么调用」。record 到超时就被摘出 pending（防止挂死请求永久驻留），
+	// 迟到包到达时已无从反查——只留 seq→(action, 时刻) 这一个极小条目，
+	// 既能算出迟到延迟，也不必把 Record（连带 sink 引用）继续挂着。
+	lateMu   sync.Mutex
+	lateSeqs map[int32]lateSeq
+	lateRing []int32 // 插入序，容量满时按序淘汰（seq 单调递增，无重复）
+
 	log *slog.Logger
+}
+
+// lateTrackCap 迟到序号表容量上限（每 client）。
+// 256 条 × 约 40B ≈ 10KB；线上典型错误率（每分钟几条）足够覆盖十几分钟，
+// 既不会无界增长，也不会因为异常流量把内存顶起来。
+const lateTrackCap = 256
+
+// lateSeq 迟到序号条目。
+type lateSeq struct {
+	action string
+	at     time.Time
 }
 
 // NewClient 创建一个 provider 客户端并注册到 group（对齐 NettyClient 构造）。
@@ -130,10 +150,71 @@ func (c *Client) HandleResponse(p *protocol.Packet) {
 	}
 	c.mu.Unlock()
 	if rec == nil {
-		c.log.Debug("receive invoke response after user timeout", "seq", p.Seq)
+		// 正常路径已在解压/解析前由 Pending + DropLateResponse 拦掉，
+		// 这里只剩「判定与响应并发」的窄窗口。
+		c.DropLateResponse(p.Seq)
 		return
 	}
 	rec.deliver(p)
+}
+
+// Pending 该序号是否仍在等响应（供通道层在解压/解析**之前**判定丢弃）。
+//
+// 迟到回包的解压与 JSON 重组成本与响应体成正比：线上毒丸请求（5MB 详情页
+// 在超时 20s 后才返回）此前会先完整解压 / 重新序列化，再因为 pending 查空被
+// 丢掉——纯属白烧 CPU 与临时内存。加这一次无竞争锁（纳秒级）换掉整包处理。
+func (c *Client) Pending(seq int32) bool {
+	c.mu.Lock()
+	_, ok := c.pending[seq]
+	c.mu.Unlock()
+	return ok
+}
+
+// trackLateTimeout 登记一个「已按超时终结、provider 可能仍会回包」的序号。
+//
+// 由 Record.onTimeout 调用：此刻 record 已从 pending 摘除，只能靠这张小表
+// 在迟到包到达时反查 action 与超时时刻。
+func (c *Client) trackLateTimeout(seq int32, action string) {
+	c.lateMu.Lock()
+	defer c.lateMu.Unlock()
+	if c.lateSeqs == nil {
+		c.lateSeqs = make(map[int32]lateSeq, 8)
+	}
+	if len(c.lateRing) >= lateTrackCap {
+		delete(c.lateSeqs, c.lateRing[0]) // 淘汰最旧，环形切片容量已满则自然回收
+		c.lateRing = c.lateRing[1:]
+	}
+	c.lateSeqs[seq] = lateSeq{action: action, at: time.Now()}
+	c.lateRing = append(c.lateRing, seq)
+}
+
+// takeLate 取出并删除迟到条目（同一序号的多包只算首包）。
+func (c *Client) takeLate(seq int32) (action string, delay time.Duration, ok bool) {
+	c.lateMu.Lock()
+	defer c.lateMu.Unlock()
+	ls, ok := c.lateSeqs[seq]
+	if !ok {
+		return "", 0, false
+	}
+	delete(c.lateSeqs, seq)
+	return ls.action, time.Since(ls.at), true
+}
+
+// DropLateResponse 处理「序号不在 pending」的响应：命中迟到表则计入迟到统计。
+// 返回 true 表示该序号曾因超时被清理（迟到），false 表示完全未知（如客户端
+// 自造序号、或服务端重启前的旧响应）。
+//
+// 统计走进程级默认记录器：此刻 Record 已终结回收，没有可用的 per-record
+// Meter；生产上 Record.Meter 本就是 metrics.Default()，口径一致。
+func (c *Client) DropLateResponse(seq int32) bool {
+	action, delay, ok := c.takeLate(seq)
+	if !ok {
+		c.log.Debug("receive invoke response with unknown seq", "seq", seq)
+		return false
+	}
+	c.log.Debug("late response after timeout", "seq", seq, "action", action, "delay", delay)
+	metrics.Default().RecordLate(c.GroupName, action, delay)
+	return true
 }
 
 // Disconnect 连接断开：注销并失败所有pending（对齐 onClientDisconnected）。
