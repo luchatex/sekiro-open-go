@@ -7,8 +7,9 @@
 产物与镜像随 `v*` 标签自动构建发布，各版本下载见
 [Releases](https://github.com/luchatex/sekiro-open-go/releases)。
 
-## [未发布]
+## [v1.0.4] - 2026-11-03
 
+发布镜像：`ghcr.io/luchatex/sekiro-open-go:1.0.4`（同时生成 `1.0`）。
 以「系统错误可诊断」为主的一个补丁版本：起因是线上 `/op` 报出 224 条系统错误，
 但原有报表只能看到「超时 147 条」，无法判断是上游变慢还是请求挂死。
 
@@ -117,6 +118,7 @@
 
 单静态二进制、无 JVM 依赖。
 
+[v1.0.4]: https://github.com/luchatex/sekiro-open-go/compare/v1.0.3...v1.0.4
 [v1.0.3]: https://github.com/luchatex/sekiro-open-go/compare/v1.0.2...v1.0.3
 [v1.0.2]: https://github.com/luchatex/sekiro-open-go/compare/v1.0.1...v1.0.2
 [v1.0.1]: https://github.com/luchatex/sekiro-open-go/compare/v1.0.0...v1.0.1

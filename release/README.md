@@ -6,7 +6,7 @@
 不再本地手工出包。
 
 ```bash
-git tag v1.0.3 && git push origin v1.0.3   # 自动构建并发布
+git tag v1.0.4 && git push origin v1.0.4   # 自动构建并发布
 ```
 
 本地构建（调试/自用，非发布途径）：
@@ -25,4 +25,4 @@ GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o sekiro ./cmd/se
 各版本变更明细（含镜像标签与修复清单）统一维护在
 [CHANGELOG.md](../CHANGELOG.md)，此处不再重复，避免两处记录漂移。
 
-版本号沿用语义化版本：缺陷修复升 patch（`v1.0.3`），新增特性升 minor（`v1.1.0`）。
+版本号沿用语义化版本：缺陷修复升 patch（`v1.0.4`），新增特性升 minor（`v1.1.0`）。
