@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	"github.com/coder/websocket"
 
 	"sekiro-go/internal/group"
+	"sekiro-go/internal/metrics"
 	"sekiro-go/internal/orderedjson"
 	"sekiro-go/internal/protocol"
 )
@@ -38,7 +40,8 @@ type wsTransport struct {
 	dead       atomic.Bool
 	deadCh     chan struct{}
 	deadOne    sync.Once
-	lastActive atomic.Int64 // 最近活跃（数据帧到达或心跳 pong），监控节点信息用
+	lastActive atomic.Int64           // 最近活跃（数据帧到达或心跳 pong），监控节点信息用
+	closedBy   atomic.Pointer[string] // 服务端主动关闭原因（空 = 由读循环发现断开）
 }
 
 func (t *wsTransport) markDead() {
@@ -125,6 +128,20 @@ func (t *wsTransport) closeWith(code int, reason string) {
 	t.conn.Close(websocket.StatusCode(code), reason)
 }
 
+// markClosedBy 记录「本连接是服务端主动关的」及其原因。
+//
+// 用途：读循环在连接被看护关闭后也会收到一次读错误，若不区分就会把同一条
+// 连接重复计一次断线（实测 pong-timeout 会同时产生一条 read-error）。
+// 只有「读循环先发现」的断开才真正代表对端/链路异常。
+func (t *wsTransport) markClosedBy(reason string) { t.closedBy.Store(&reason) }
+
+func (t *wsTransport) closedReason() string {
+	if p := t.closedBy.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
+
 // wsRegister 处理 WebSocket provider 注册（对齐 ServiceHttp.doWsClientRegister +
 // ServiceWsClient + WsHeartBeatHandler）。
 //
@@ -136,6 +153,9 @@ func wsRegister(w http.ResponseWriter, r *http.Request, mgr *group.Manager, log 
 	gName := q.Get("group")
 	clientID := q.Get("clientId")
 	if gName == "" || clientID == "" {
+		// 埋点：参数缺失是最常见的一类「连不上」，旧版只在响应体里提示，
+		// 监控页看不到——这里计入连接侧失败原因
+		metrics.Default().ConnRegisterFail("param-missing")
 		httpResponseText(w, http.StatusBadRequest,
 			"{group} or {clientId} can not be empty!! demo url: ws://host:5612/register?group=ws-group&clientId=testClient")
 		return
@@ -143,6 +163,7 @@ func wsRegister(w http.ResponseWriter, r *http.Request, mgr *group.Manager, log 
 
 	conn, err := wsAccept(w, r)
 	if err != nil {
+		metrics.Default().ConnRegisterFail("accept-error")
 		return
 	}
 	conn.SetReadLimit(1 << 25) // 32MB，对齐聚合器上限
@@ -154,6 +175,7 @@ func wsRegister(w http.ResponseWriter, r *http.Request, mgr *group.Manager, log 
 	tr := &wsTransport{conn: conn, peer: r.RemoteAddr, compressed: compressed, deadCh: make(chan struct{})}
 	cl := group.NewClient(tr, g, clientID, log)
 	g.Register(cl)
+	metrics.Default().ConnRegisterOK()
 	log.Info("ws client registered", "group", gName, "clientId", clientID,
 		"compression", tr.Compression())
 	wsServe(cl, tr, log)
@@ -187,6 +209,10 @@ func wsServe(cl *group.Client, tr *wsTransport, log *slog.Logger) {
 	stop := make(chan struct{})
 	defer close(stop)
 
+	// 连接侧埋点：本连接终止的唯一一次计数（看护 goroutine / 读循环互斥，
+	// 先 close 的一方既写日志也计数，另一方走「善后」分支不重复计）
+	closed := func(reason string) { metrics.Default().ConnClosed(reason) }
+
 	// 心跳：写空闲 20s 发 Ping（对齐 WsHeartBeatHandler WRITER_IDLE）。
 	//
 	// 关键：Ping 成功（收到对应 pong）必须刷新 lastRead。
@@ -216,6 +242,8 @@ func wsServe(cl *group.Client, tr *wsTransport, log *slog.Logger) {
 					log.Info("ws provider closed",
 						"reason", "pong-timeout", "clientId", cl.ID,
 						"lifetime", lifetime(), "err", err)
+					tr.markClosedBy("pong-timeout")
+					closed("pong-timeout")
 					tr.closeNow()
 					return
 				}
@@ -250,6 +278,8 @@ func wsServe(cl *group.Client, tr *wsTransport, log *slog.Logger) {
 					log.Info("ws provider closed",
 						"reason", "read-idle", "clientId", cl.ID,
 						"lifetime", lifetime())
+					tr.markClosedBy("read-idle")
+					closed("read-idle")
 					tr.closeNow()
 					return
 				}
@@ -261,15 +291,18 @@ func wsServe(cl *group.Client, tr *wsTransport, log *slog.Logger) {
 	for {
 		msgType, data, err := tr.read(ctx)
 		if err != nil {
-			if tr.Active() {
-				// 服务端未主动回收时的真实死亡：客户端断开/网络中断/
-				// 中间设备切断。Info 级 + 存活时长，供重连周期分析
-				log.Info("ws client disconnected",
-					"reason", "read-error", "clientId", cl.ID,
-					"lifetime", lifetime(), "err", err)
+			if by := tr.closedReason(); by != "" {
+				// 看护已主动关闭并计过数（pong-timeout/read-idle/bad-*），
+				// 这里的读错误只是善后，不能重复计入断线统计
+				log.Debug("ws client closed (reclaimed)", "reason", by, "err", err)
 			} else {
-				// 心跳/看护已主动关闭，这里的 read 退出只是善后
-				log.Debug("ws client closed (reclaimed)", "err", err)
+				// 读循环先发现的断开：客户端关闭/网络中断/中间设备切断。
+				// Info 级 + 存活时长，供重连周期分析
+				reason := classifyReadErr(err)
+				log.Info("ws client disconnected",
+					"reason", reason, "clientId", cl.ID,
+					"lifetime", lifetime(), "err", err)
+				closed(reason)
 			}
 			cl.Disconnect()
 			return
@@ -277,6 +310,7 @@ func wsServe(cl *group.Client, tr *wsTransport, log *slog.Logger) {
 		lastRead.Store(time.Now().UnixNano())
 		if msgType != websocket.MessageText {
 			log.Warn("error ws request: non-text frame")
+			closed("bad-frame")
 			tr.closeWith(wsCloseBadRequest, "error ws request: non-text frame")
 			cl.Disconnect()
 			return
@@ -287,6 +321,27 @@ func wsServe(cl *group.Client, tr *wsTransport, log *slog.Logger) {
 	}
 }
 
+// classifyReadErr 把读错误归成稳定短标签，供日志与 /op 连接侧统计使用。
+// 区分「对端正常关闭」与「链路异常」：前者不该计入错误率，后者要能一眼看出。
+func classifyReadErr(err error) string {
+	var ce websocket.CloseError
+	if errors.As(err, &ce) {
+		switch ce.Code {
+		// 1000 正常关闭；1001 对端离开；1005 收到空 close 帧（浏览器
+		// socket.close() 不带码、undici 等实现也走这条）——都算客户端主动关闭，
+		// 不该计入链路异常。
+		case websocket.StatusNormalClosure, websocket.StatusGoingAway,
+			websocket.StatusNoStatusRcvd:
+			return "client-closed"
+		}
+		return "close-" + strconv.Itoa(int(ce.Code))
+	}
+	if errors.Is(err, context.Canceled) {
+		return "client-closed"
+	}
+	return "read-error"
+}
+
 // wsHandleMessage 对齐 ServiceWsClient.channelRead0：
 // 解析完整 JSON（分片已在字节层重组，D12）→ 取 __sekiro_seq__ → 构造响应包路由。
 // 返回 false 表示连接已终止。
@@ -294,6 +349,7 @@ func wsHandleMessage(cl *group.Client, tr *wsTransport, data []byte, log *slog.L
 	msg, err := orderedjson.Parse(data)
 	if err != nil {
 		log.Warn("ws frame json parse failed", "err", err)
+		metrics.Default().ConnClosed("bad-json")
 		tr.closeWith(wsCloseBadRequest, "error ws request: invalid json")
 		cl.Disconnect()
 		return false
@@ -301,6 +357,7 @@ func wsHandleMessage(cl *group.Client, tr *wsTransport, data []byte, log *slog.L
 	seq := msg.GetInt(protocol.WSSeqNumber)
 	if seq <= 0 {
 		log.Warn("serial number not set for client!!")
+		metrics.Default().ConnClosed("bad-seq")
 		tr.closeWith(wsCloseBadRequest, "serial number not set for client!!")
 		cl.Disconnect()
 		return false

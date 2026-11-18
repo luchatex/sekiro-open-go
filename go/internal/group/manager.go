@@ -2,7 +2,7 @@ package group
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"log/slog"
 	"sort"
 	"sync"
@@ -70,7 +70,9 @@ func (m *Manager) AllocateContext(ctx context.Context, groupName, bindClient, co
 	g := m.get(groupName)
 	if g == nil {
 		if bindClient != "" {
-			return nil, fmt.Errorf("no device found for clientId:%s", bindClient)
+			return nil, m.enrichBindMiss(ctx, &BindMissError{
+				Group: groupName, ClientID: bindClient, GroupMissing: true,
+			})
 		}
 		return nil, ErrPoolEmpty
 	}
@@ -79,12 +81,42 @@ func (m *Manager) AllocateContext(ctx context.Context, groupName, bindClient, co
 	select {
 	case r := <-reply:
 		if r.err != nil {
+			var miss *BindMissError
+			if errors.As(r.err, &miss) {
+				return nil, m.enrichBindMiss(ctx, miss)
+			}
 			return nil, r.err
 		}
 		return r.client, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// enrichBindMiss 给 bind_client 失败补上「该 clientId 真实在哪」：
+// 回查其他 group 是否在线该设备，命中的 group 名写进错误文案。
+//
+// 只在失败路径执行（正常调用零开销），代价是每个其他 group 一次 actor 投递。
+// 命中时额外打一条 Warn——线上排查「设备明明在线却调不通」时，看日志即可定位，
+// 不必再人工比对 /op/api/clients。
+func (m *Manager) enrichBindMiss(ctx context.Context, miss *BindMissError) error {
+	for _, name := range m.Names() {
+		if name == miss.Group {
+			continue
+		}
+		g := m.get(name)
+		if g == nil {
+			continue
+		}
+		if g.hasActiveClient(ctx, miss.ClientID) {
+			miss.Elsewhere = append(miss.Elsewhere, name)
+		}
+	}
+	if len(miss.Elsewhere) > 0 {
+		m.log.Warn("bind_client miss: device online in another group",
+			"group", miss.Group, "clientId", miss.ClientID, "onlineIn", miss.Elsewhere)
+	}
+	return miss
 }
 
 // EnabledClientIDs group 内活跃客户端 ID 列表（clientQueue 接口）。

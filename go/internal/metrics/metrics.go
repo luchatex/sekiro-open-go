@@ -107,14 +107,24 @@ type Recorder struct {
 	aggs map[aggKey]*aggStat
 	// 迟到响应（超时后 provider 才回包）：按 group/action 聚合
 	lates map[key]*lateStat
+
+	// 连接侧计数（见 conn.go）：invoke 指标之外的另一半事实——
+	// 「客户端连不上」在旧版监控里完全不可见，排查只能靠 curl 试探。
+	connOK      int64
+	connFail    int64
+	connClosed  int64
+	connFailBy  map[string]int64 // 注册失败原因 → 计数
+	connCloseBy map[string]int64 // 断开原因 → 计数
 }
 
 // New 创建记录器。
 func New() *Recorder {
 	return &Recorder{started: time.Now(), ents: make(map[key]*entity),
-		reasons: make(map[string]*reasonStat),
-		aggs:    make(map[aggKey]*aggStat),
-		lates:   make(map[key]*lateStat)}
+		reasons:     make(map[string]*reasonStat),
+		aggs:        make(map[aggKey]*aggStat),
+		lates:       make(map[key]*lateStat),
+		connFailBy:  make(map[string]int64),
+		connCloseBy: make(map[string]int64)}
 }
 
 var def atomic.Pointer[Recorder]
@@ -346,6 +356,7 @@ type Snapshot struct {
 	Uptime        string           `json:"uptime"`
 	QPS           float64          `json:"qps"`
 	SysErrReasons map[string]int64 `json:"sysErrReasons,omitempty"` // 系统错误原因分布（全局）
+	Conn          *ConnJSON        `json:"conn"`                    // 连接侧：注册/断开（见 conn.go）
 	Groups        []GroupJSON      `json:"groups"`
 	Hourly        *SeriesJSON      `json:"hourly"` // 最近 24 小时桶
 	Daily         *SeriesJSON      `json:"daily"`  // 最近 7 天桶（本地时区）
@@ -365,7 +376,7 @@ const (
 func (r *Recorder) Snapshot(clients func(group string) int, registered []string) *Snapshot {
 	if r == nil {
 		return &Snapshot{ServerTime: time.Now().Unix(), Groups: []GroupJSON{},
-			Hourly: emptySeries(0), Daily: emptySeries(0)}
+			Hourly: emptySeries(0), Daily: emptySeries(0), Conn: &ConnJSON{}}
 	}
 	now := time.Now()
 	snap := &Snapshot{
@@ -429,6 +440,7 @@ func (r *Recorder) Snapshot(clients func(group string) int, registered []string)
 			snap.SysErrReasons[reason] = rs.count
 		}
 	}
+	conn := r.connLocked() // 连接侧计数：与 invoke 快照同一把锁内复制，避免两次读不一致
 	r.mu.Unlock()
 
 	// 注册表中尚无调用流量的 group：补进聚合（零指标），
@@ -446,6 +458,7 @@ func (r *Recorder) Snapshot(clients func(group string) int, registered []string)
 	sort.Strings(gnames)
 
 	snap.Groups = make([]GroupJSON, 0, len(gnames))
+	online := 0
 	for _, name := range gnames {
 		g := groups[name]
 		gj := GroupJSON{
@@ -458,6 +471,7 @@ func (r *Recorder) Snapshot(clients func(group string) int, registered []string)
 		}
 		if clients != nil {
 			gj.Clients = clients(name)
+			online += gj.Clients
 		}
 		gj.Actions = make([]ActionJSON, 0, len(g.action))
 		for _, a := range sortedKeys(g.action) {
@@ -471,6 +485,8 @@ func (r *Recorder) Snapshot(clients func(group string) int, registered []string)
 
 	snap.Hourly = buildSeries(hourIDs, 3600, allHours[:]) // 小时序号 → unix 秒
 	snap.Daily = buildSeries(dayBuckets, 1, allDays[:])   // 天桶键已是 unix 秒
+	conn.OnlineNow = online
+	snap.Conn = &conn
 	return snap
 }
 

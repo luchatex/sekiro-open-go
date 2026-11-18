@@ -176,6 +176,7 @@ a { color: var(--accent); text-decoration: none; }
 
   <section class="card">
     <div class="head"><h2>客户端节点</h2><span class="spacer"></span>
+      <span class="meta" id="connMeta">–</span>
       <span class="meta" id="nodesMeta">–</span></div>
     <div style="overflow-x:auto">
       <table>
@@ -261,6 +262,11 @@ a { color: var(--accent); text-decoration: none; }
      「每分钟固定几条」的规律性失败；<strong>迟到响应</strong> = 服务端已按超时回包后 provider
      才到达的响应（仅作诊断，调用方早已收到 timeout）：迟到只差几秒说明上游「慢」，应调大
      <code>invoke_timeout</code> 或修客户端超时；迟到几十秒以上说明上游「挂死」，应断链并让调用方重试。</p>
+  <p>连接侧排障（客户端节点右上角）：<strong>注册成功/失败</strong>与<strong>断开原因</strong>自进程启动累计，
+     用于回答「客户端到底连上没有」——invoke 指标只覆盖「连上之后」。断开原因中
+     <code>pong-timeout</code>/<code>read-idle</code> 是服务端心跳判死（对端不回 pong 或链路半开），
+     <code>read-error</code> 是链路异常，<code>client-closed</code> 为客户端正常关闭，
+     <code>bad-frame</code>/<code>bad-json</code>/<code>bad-seq</code> 是客户端发了非法帧（连接会被 4400 关闭）。</p>
   <p>sekiro-go · 开源版监控（对齐官方商业版报表口径）· API：<a href="/op/api/stats" target="_blank">/op/api/stats</a>
      · <a href="/op/api/clients" target="_blank">/op/api/clients</a>
      · <a href="/op/api/errors" target="_blank">/op/api/errors</a></p>
@@ -366,6 +372,25 @@ function renderKPIs(d) {
     `<div class="kpi"><div class="label">${l}</div><div class="value">${v}</div></div>`).join("");
   $("uptime").textContent = d.uptime;
   $("clock").textContent = new Date(d.serverTime * 1000).toLocaleString("zh-CN", { hour12: false });
+  renderConn(d.conn);
+}
+
+// ---------- 连接侧（注册/断开）----------
+// 旧版监控只有 invoke 侧指标，「客户端压根没连上」在页面上完全不可见。
+const fmtReasons = (m, n) => {
+  if (!m) return "";
+  return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, n)
+    .map(([k, v]) => `${k}×${v}`).join(" · ");
+};
+function renderConn(c) {
+  const el = $("connMeta");
+  if (!c) { el.textContent = "–"; return; }
+  const parts = [`注册成功 ${fmtInt(c.registerOk)}`];
+  if (c.registerFail) parts.push(`失败 ${fmtInt(c.registerFail)}（${fmtReasons(c.failReasons, 2)}）`);
+  if (c.closedTotal) parts.push(`断开 ${fmtInt(c.closedTotal)}（${fmtReasons(c.closeReasons, 3)}）`);
+  el.textContent = parts.join(" · ");
+  el.title = "连接侧统计：自进程启动累计（重启清零）。" +
+    "pong-timeout/read-idle = 服务端心跳判死；read-error = 链路异常；client-closed = 客户端正常关闭。";
 }
 
 // ---------- 趋势图（SVG 堆叠柱） ----------

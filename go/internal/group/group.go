@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -251,9 +252,11 @@ func (g *Group) allocate(ctx context.Context, bindClient, constantKey string, re
 	g.postContext(ctx, func() {
 		switch {
 		case bindClient != "":
-			c := g.fetchByClientID(bindClient)
+			c, existed := g.fetchByClientID(bindClient)
 			if c == nil {
-				replyAlloc(ctx, reply, allocResult{err: fmt.Errorf("no device found for clientId:%s", bindClient)})
+				replyAlloc(ctx, reply, allocResult{err: &BindMissError{
+					Group: g.name, ClientID: bindClient, Disconnected: existed,
+				}})
 				return
 			}
 			replyAlloc(ctx, reply, allocResult{client: c})
@@ -285,23 +288,88 @@ func replyAlloc(ctx context.Context, reply chan<- allocResult, res allocResult) 
 	}
 }
 
-func (g *Group) fetchByClientID(id string) *Client {
+// fetchByClientID 按 clientId 在 group 的 ring 中定位（仅 actor 内调用）。
+//
+// 第二个返回值表示「该 clientId 曾在本 group 注册、但连接已断」——
+// 调用方据此区分「设备从来不在这个 group」与「设备掉线了」，两者文案不同。
+func (g *Group) fetchByClientID(id string) (*Client, bool) {
 	k := protocol.MurmurHashString(id)
 	c, ok := g.ring[k]
 	if !ok {
-		g.log.Info("no device found for clientId", "clientId", id)
-		return nil
+		return nil, false
 	}
 	if c.ID != id {
 		g.log.Warn("hash conflict!! ？？", "clientId1", id, "clientId2", c.ID, "murHash", k)
-		return nil
+		return nil, false
 	}
 	if !c.Active() || c.offline.Load() {
 		delete(g.ring, k)
 		g.removeKey(k)
-		return nil
+		g.log.Info("bind miss: device registered here but connection is down", "clientId", id)
+		return nil, true
 	}
-	return c
+	return c, true
+}
+
+// BindMissError bind_client 定位失败。
+//
+// 旧实现三种截然不同的原因共用一句 "no device found for clientId:x"，线上
+// 排查时无法区分「设备在线于别的 group」「group 根本不存在」「设备掉线」，
+// 只能人工比对 /op/api/clients。这里把三者分开，并在文案尾部附加该 clientId
+// 的真实归属（由 Manager 回查后填充）。
+//
+// 兼容性：Error() 保留 "no device found for clientId:" 前缀不动，只在尾部追加
+// 括号说明——调用方若按前缀匹配错误文案，行为不变。
+type BindMissError struct {
+	Group        string   // 请求指定的 group
+	ClientID     string   // bind_client 目标
+	GroupMissing bool     // 指定的 group 不存在（从未注册过 client）
+	Disconnected bool     // 该设备曾在本 group 注册，但连接已断
+	Elsewhere    []string // 该 clientId 当前在线于哪些其他 group（排障提示）
+}
+
+func (e *BindMissError) Error() string {
+	var b strings.Builder
+	b.WriteString("no device found for clientId:")
+	b.WriteString(e.ClientID)
+	switch {
+	case e.GroupMissing:
+		fmt.Fprintf(&b, " (group %q not found)", e.Group)
+	case e.Disconnected:
+		b.WriteString(" (device disconnected)")
+	}
+	if n := len(e.Elsewhere); n == 1 {
+		fmt.Fprintf(&b, " (device online in group %q)", e.Elsewhere[0])
+	} else if n > 1 {
+		fmt.Fprintf(&b, " (device online in groups %q)", strings.Join(e.Elsewhere, `", "`))
+	}
+	return b.String()
+}
+
+// hasActiveClient 该 group 当前是否有该 clientId 的活跃连接（跨 group 回查用）。
+// actor 已停止或 ctx 取消时返回 false，不阻塞调用方。
+func (g *Group) hasActiveClient(ctx context.Context, id string) bool {
+	reply := make(chan bool, 1)
+	fn := func() {
+		k := protocol.MurmurHashString(id)
+		c, ok := g.ring[k]
+		reply <- ok && c.ID == id && c.Active() && !c.offline.Load()
+	}
+	select {
+	case g.mail <- fn:
+	case <-ctx.Done():
+		return false
+	case <-g.actorStop:
+		return false
+	}
+	select {
+	case v := <-reply:
+		return v
+	case <-ctx.Done():
+		return false
+	case <-g.actorStop:
+		return false
+	}
 }
 
 // consistentAllocate 一致性哈希：≥hash 的第一个活节点，否则回卷到头部。
@@ -426,7 +494,7 @@ func (g *Group) clientDetails(reply chan<- []ClientInfo) {
 // 连接关闭触发 Disconnect → 彻底注销 + pending 失败。
 func (g *Group) kick(clientID string, reply chan<- *Client) {
 	g.post(func() {
-		c := g.fetchByClientID(clientID)
+		c, _ := g.fetchByClientID(clientID)
 		if c == nil {
 			reply <- nil
 			return

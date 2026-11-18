@@ -52,6 +52,11 @@ http://127.0.0.1:5612/op
   （跳过 `group`/`action`/`invoke_timeout`/`__sekiro_seq__` 等框架键，截断 256B），
   用于把「反复失败的同一条请求」指认出来。默认关闭，避免爬取 URL / 文书 ID 等
   业务参数进入监控数据；排障时临时开启重启即可
+- **连接侧统计**（`conn`，客户端节点卡片右上角）：注册成功/失败次数与失败原因
+  （`param-missing` / `accept-error`）、连接终止次数与断开原因
+  （`pong-timeout` / `read-idle` / `read-error` / `client-closed` / `bad-frame` /
+  `bad-json` / `bad-seq`）。invoke 指标只覆盖「连上之后」，这一组回答
+  「客户端到底连上没有」——旧版遇到 404/401 或心跳判死重连时监控一片空白
 - **数据 API**：`/op/api/stats`、`/op/api/clients`、`/op/api/errors` 返回 JSON 快照（可自建报表/对接 Grafana JSON datasource）
 - **实现**：`internal/metrics` 内存统计（小时桶保留 26h、天桶保留 7 天，两份窄桶独立存储，
   每维度桶数 34 个，而非把小时桶留满 7 天的 168 个），进程重启清零、无持久化；
@@ -77,8 +82,12 @@ http://127.0.0.1:5612/op
    且 `maxDelayMs` 只有几秒，说明 provider 只是慢过 `invoke_timeout`（调大超时
    或修客户端即可）；若迟到延迟到几十秒甚至几分钟，说明客户端请求挂死，
    应让客户端加 `AbortController`/读超时并在失败后跳过该条目，避免毒丸重放。
-3. **看事件 message 与参数定位具体请求**：`no device found` / `pool queue empty`
-   属客户端重连空窗（调用方做 1–3s×3 次短重试即可自愈）；要指认「哪一条请求
+3. **看事件 message 与参数定位具体请求**：`bind_client` 是 `(group, clientId)`
+   复合定位——设备在线但注册在别的 group 时同样查不到，服务端现在会把真实归属
+   写进文案（`no device found for clientId:x (device online in group "ws_list")`，
+   group 不存在则注明 `group "y" not found`，设备刚掉线则 `(device disconnected)`）。
+   要核对成员关系直接用 `GET /business/clientQueue?group=xx`；`pool queue empty`
+   属客户端重连空窗（调用方做 1–3s×3 次短重试即可自愈）。要指认「哪一条请求
    在反复失败」，临时加 `-op-err-params` 重启，事件会带上 `params` 摘要，
    相同参数每分钟重现即是毒丸。
 

@@ -7,6 +7,37 @@
 产物与镜像随 `v*` 标签自动构建发布，各版本下载见
 [Releases](https://github.com/luchatex/sekiro-open-go/releases)。
 
+## [Unreleased]
+
+以「连不上也看得见」为主的一轮可诊断性修复：起因是线上 js-client 报
+`no device found for clientId:x`，而设备其实在线——只是注册在另一个 group；
+服务端文案无法区分「设备在别组在线 / group 不存在 / 设备已掉线」，且连接侧
+（握手、注册、断开）完全没有埋点，只能人工 curl 试探。
+
+### 新增
+
+- **连接侧统计**（`/op/api/stats` 的 `conn` 字段，监控页「客户端节点」右上角）：
+  在线数、注册成功/失败（失败原因 `param-missing` / `accept-error`）、连接终止
+  次数与断开原因（`pong-timeout` / `read-idle` / `read-error` / `client-closed` /
+  `bad-frame` / `bad-json` / `bad-seq`）。invoke 指标只覆盖「连上之后」，
+  这一组补上「客户端到底连上没有」。
+
+### 修复
+
+- **`bind_client` 失败文案带归属**：错误信息保留 `no device found for clientId:x`
+  前缀（兼容按前缀匹配的调用方），尾部追加三种成因的区分——该 clientId 在线于
+  哪个 group（`device online in group "ws_list"`）、指定的 group 是否存在
+  （`group "y" not found`）、设备是否刚掉线（`device disconnected`）；同时在
+  服务端打一条 `bind_client miss: device online in another group` 的 Warn 日志。
+- **真实断线日志此前是死代码**：读循环在 `tr.read` 返回错误后才判断
+  `tr.Active()`，而 `read` 出错时已自行 `markDead`，该分支恒为假——生产 Info
+  级别下「对端断开/网络中断」一条日志都不会有，只剩看护主动关闭的两条，排查时
+  极易误判成「服务端无故踢人」。改为按「服务端是否主动关闭」判定，并区分
+  `client-closed`（1000/1001/1005）与链路异常。
+- **看护关闭导致的断线重复计数**：同一条连接被 `pong-timeout` 关闭后，读循环
+  收到的读错误会被再计一次断线。现在服务端主动关闭会先登记原因，读循环只记
+  一次善后日志，不重复计入统计。
+
 ## [v1.0.4] - 2026-11-03
 
 发布镜像：`ghcr.io/luchatex/sekiro-open-go:1.0.4`（同时生成 `1.0`）。
