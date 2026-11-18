@@ -195,16 +195,17 @@ internal/orderedjson 保序 JSON（对齐 fastjson OrderedField）
 HTTP API: /business/invoke | /business/groupList | /business/clientQueue（含 -demo 前缀）
 监控:      /op（页面） | /op/api/stats（JSON 快照）
 WS 注册:  /register?group=&clientId=（JSON 文本帧，__sekiro_seq__ 关联）
-WS 心跳:  /register?group=&clientId=&hb=1（服务端回 {"__sekiro_hello__":1,"hb":15}，
+WS 心跳:  /register?group=&clientId=&hb=1（服务端回 {"__sekiro_hello__":1,"hb":10}，
           之后客户端发 {"__sekiro_hb__":<ts>} 由服务端回显；未声明 hb=1 的连接行为不变）
 ```
 
 **为什么需要应用层心跳**：浏览器没有 WS Ping API，provider 平时又是纯静默端。
-链路被中间设备静默切断（NAT 回收、休眠唤醒、网络切换）时，服务端 25s 内靠 Ping
-判死并把设备移出 group，而页面永远停在 `readyState=1`——业务侧只看到「设备凭空
-消失」。`hb=1` 让客户端也能判活：连续 3 个周期（默认 45s）无任何下行帧即主动重建
-连接，把「假在线」窗口从无限期压到一分钟内。老客户端不声明 `hb=1`，收不到通告，
-行为与旧版完全一致；老服务端则忽略该参数、不下发通告，新客户端自动降级。
+链路被中间设备静默切断（NAT 回收、休眠唤醒、网络切换）时，服务端 30s 内（写空闲
+20s + 等 pong 10s）判死并把设备移出 group，而页面永远停在 `readyState=1`——业务侧
+只看到「设备凭空消失」。`hb=1` 让客户端也能判活：连续 3 个周期（10s × 3 = 30s，
+与服务端判死对齐）无任何下行帧即主动重建连接，把「假在线」窗口从无限期压到半分钟。
+老客户端不声明 `hb=1`，收不到通告，行为与旧版完全一致；老服务端则忽略该参数、
+不下发通告，新客户端自动降级。
 
 ## 验证体系
 

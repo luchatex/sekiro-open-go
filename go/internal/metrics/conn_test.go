@@ -9,6 +9,7 @@ func TestConnCountersInSnapshot(t *testing.T) {
 	r.ConnRegisterOK()
 	r.ConnRegisterOK()
 	r.ConnRegisterFail("param-missing")
+	r.ConnDuplicate()
 	r.ConnClosed("pong-timeout")
 	r.ConnClosed("client-closed")
 	r.ConnClosed("pong-timeout")
@@ -29,6 +30,9 @@ func TestConnCountersInSnapshot(t *testing.T) {
 	}
 	if c.ClosedTotal != 3 {
 		t.Fatalf("closedTotal = %d, want 3", c.ClosedTotal)
+	}
+	if c.Duplicate != 1 {
+		t.Fatalf("duplicate = %d, want 1", c.Duplicate)
 	}
 	if c.CloseReasons["pong-timeout"] != 2 || c.CloseReasons["client-closed"] != 1 {
 		t.Fatalf("closeReasons = %v", c.CloseReasons)

@@ -113,6 +113,7 @@ type Recorder struct {
 	connOK      int64
 	connFail    int64
 	connClosed  int64
+	connDup     int64
 	connFailBy  map[string]int64 // 注册失败原因 → 计数
 	connCloseBy map[string]int64 // 断开原因 → 计数
 }

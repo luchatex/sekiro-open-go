@@ -93,6 +93,7 @@ func (t *wsTransport) Close() {
 func (t *wsTransport) CloseAfter(d time.Duration) {
 	time.AfterFunc(d, func() {
 		t.markDead()
+		t.markClosedBy("duplicate") // 已作为「重复注册」计入连接侧，读循环不再重复计一次断线
 		t.conn.Close(wsCloseBadRequest, "duplicate client register")
 	})
 }
@@ -279,7 +280,7 @@ func wsServe(cl *group.Client, tr *wsTransport, log *slog.Logger) {
 				if !tr.Active() {
 					return
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), protocol.ServerPongTimeout())
 				err := tr.ping(ctx)
 				cancel()
 				if err != nil {

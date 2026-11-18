@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"sekiro-go/internal/metrics"
 	"sekiro-go/internal/protocol"
 )
 
@@ -34,6 +35,7 @@ type Group struct {
 	keys        []uint64 // 升序
 	rotate      []*Client
 	offlineMap  map[string]*Client
+	down        map[string]time.Time // clientId → 掉线时刻（仅排障文案用，5min TTL）
 	emptyCount  int
 	firstEmpty  time.Time
 	janitorStop chan struct{}
@@ -157,6 +159,7 @@ func (g *Group) register(c *Client) {
 				g.log.Warn("duplicate client register",
 					"old", old.ID, "new", c.ID,
 					"oldLifetime", time.Since(time.Unix(0, old.connectedAt.Load())).Round(100*time.Millisecond).String())
+				metrics.Default().ConnDuplicate()
 				// BugFix（Java 注释记载）：旧连接延迟 30s 关闭，
 				// 避免网络抖动重复注册时误杀新连接导致假死
 				old.tr.CloseAfter(30 * time.Second)
@@ -195,6 +198,9 @@ func (g *Group) unregister(c *Client) {
 		if old == c {
 			delete(g.ring, c.Key)
 			g.removeKey(c.Key)
+			// 记下掉线时刻：随后几分钟内若有人 bind_client 找它，
+			// 错误文案能直接说「1 分钟前掉线」，而不是含糊的「查无此设备」
+			g.markDownLocked(c.ID)
 		}
 	})
 }
@@ -252,11 +258,15 @@ func (g *Group) allocate(ctx context.Context, bindClient, constantKey string, re
 	g.postContext(ctx, func() {
 		switch {
 		case bindClient != "":
-			c, existed := g.fetchByClientID(bindClient)
+			c := g.fetchByClientID(bindClient)
 			if c == nil {
-				replyAlloc(ctx, reply, allocResult{err: &BindMissError{
-					Group: g.name, ClientID: bindClient, Disconnected: existed,
-				}})
+				miss := &BindMissError{Group: g.name, ClientID: bindClient}
+				// 近期是否在本 group 掉过线：能直接说明「设备刚断」而不是「本来就不在」
+				if at, ok := g.downSinceLocked(bindClient); ok {
+					miss.Disconnected = true
+					miss.Ago = time.Since(at)
+				}
+				replyAlloc(ctx, reply, allocResult{err: miss})
 				return
 			}
 			replyAlloc(ctx, reply, allocResult{client: c})
@@ -289,26 +299,50 @@ func replyAlloc(ctx context.Context, reply chan<- allocResult, res allocResult) 
 }
 
 // fetchByClientID 按 clientId 在 group 的 ring 中定位（仅 actor 内调用）。
-//
-// 第二个返回值表示「该 clientId 曾在本 group 注册、但连接已断」——
-// 调用方据此区分「设备从来不在这个 group」与「设备掉线了」，两者文案不同。
-func (g *Group) fetchByClientID(id string) (*Client, bool) {
+// 定位失败（不在 ring / 连接已死）时返回 nil，并把「刚掉线」记进 down 表。
+func (g *Group) fetchByClientID(id string) *Client {
 	k := protocol.MurmurHashString(id)
 	c, ok := g.ring[k]
 	if !ok {
-		return nil, false
+		return nil
 	}
 	if c.ID != id {
 		g.log.Warn("hash conflict!! ？？", "clientId1", id, "clientId2", c.ID, "murHash", k)
-		return nil, false
+		return nil
 	}
 	if !c.Active() || c.offline.Load() {
 		delete(g.ring, k)
 		g.removeKey(k)
+		g.markDownLocked(id)
 		g.log.Info("bind miss: device registered here but connection is down", "clientId", id)
-		return nil, true
+		return nil
 	}
-	return c, true
+	return c
+}
+
+// downTTL 「刚掉线」记录的保留时长。只服务排障：设备掉线后几分钟内仍有人按
+// bind_client 调用是常态，超过这个窗口再提「X 分钟前掉过线」已无参考价值。
+const downTTL = 5 * time.Minute
+
+// markDownLocked 记录某 clientId 的掉线时刻（仅 actor 内调用）。
+func (g *Group) markDownLocked(id string) {
+	if g.down == nil {
+		g.down = make(map[string]time.Time)
+	}
+	g.down[id] = time.Now()
+}
+
+// downSinceLocked 查该 clientId 的掉线时刻（超过 downTTL 视为无记录并顺手清理）。
+func (g *Group) downSinceLocked(id string) (time.Time, bool) {
+	at, ok := g.down[id]
+	if !ok {
+		return time.Time{}, false
+	}
+	if time.Since(at) > downTTL {
+		delete(g.down, id)
+		return time.Time{}, false
+	}
+	return at, true
 }
 
 // BindMissError bind_client 定位失败。
@@ -321,11 +355,12 @@ func (g *Group) fetchByClientID(id string) (*Client, bool) {
 // 兼容性：Error() 保留 "no device found for clientId:" 前缀不动，只在尾部追加
 // 括号说明——调用方若按前缀匹配错误文案，行为不变。
 type BindMissError struct {
-	Group        string   // 请求指定的 group
-	ClientID     string   // bind_client 目标
-	GroupMissing bool     // 指定的 group 不存在（从未注册过 client）
-	Disconnected bool     // 该设备曾在本 group 注册，但连接已断
-	Elsewhere    []string // 该 clientId 当前在线于哪些其他 group（排障提示）
+	Group        string        // 请求指定的 group
+	ClientID     string        // bind_client 目标
+	GroupMissing bool          // 指定的 group 不存在（从未注册过 client）
+	Disconnected bool          // 该设备在本 group 有近期掉线记录（窗口见 downTTL）
+	Ago          time.Duration // 掉线时长（仅 Disconnected 时有效）
+	Elsewhere    []string      // 该 clientId 当前在线于哪些其他 group（排障提示）
 }
 
 func (e *BindMissError) Error() string {
@@ -336,7 +371,7 @@ func (e *BindMissError) Error() string {
 	case e.GroupMissing:
 		fmt.Fprintf(&b, " (group %q not found)", e.Group)
 	case e.Disconnected:
-		b.WriteString(" (device disconnected)")
+		fmt.Fprintf(&b, " (device disconnected %s)", agoText(e.Ago))
 	}
 	if n := len(e.Elsewhere); n == 1 {
 		fmt.Fprintf(&b, " (device online in group %q)", e.Elsewhere[0])
@@ -344,6 +379,22 @@ func (e *BindMissError) Error() string {
 		fmt.Fprintf(&b, " (device online in groups %q)", strings.Join(e.Elsewhere, `", "`))
 	}
 	return b.String()
+}
+
+// agoText 掉线时长文案：just now / 12s ago / 3m ago / 2h ago。
+// Windows 上 time.Since 的分辨率可达毫秒级，刚判死时可能恰好为 0，
+// 因此不能只靠 `Ago > 0` 判断有没有记录。
+func agoText(d time.Duration) string {
+	switch {
+	case d < time.Second:
+		return "just now"
+	case d < time.Minute:
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	}
 }
 
 // hasActiveClient 该 group 当前是否有该 clientId 的活跃连接（跨 group 回查用）。
@@ -494,7 +545,7 @@ func (g *Group) clientDetails(reply chan<- []ClientInfo) {
 // 连接关闭触发 Disconnect → 彻底注销 + pending 失败。
 func (g *Group) kick(clientID string, reply chan<- *Client) {
 	g.post(func() {
-		c, _ := g.fetchByClientID(clientID)
+		c := g.fetchByClientID(clientID)
 		if c == nil {
 			reply <- nil
 			return

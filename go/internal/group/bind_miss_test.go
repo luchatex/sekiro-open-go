@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 // bind_client 定位失败的文案必须能区分三种成因，并指出设备的真实归属。
@@ -78,8 +79,52 @@ func TestBindMissDisconnected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected bind miss")
 	}
-	if !strings.Contains(err.Error(), "(device disconnected)") {
+	if !strings.Contains(err.Error(), "device disconnected") {
 		t.Fatalf("未说明设备已断线: %q", err.Error())
+	}
+	if strings.Contains(err.Error(), "(device disconnected)") {
+		t.Fatalf("应带掉线时长: %q", err.Error())
+	}
+}
+
+func TestBindMissAfterDisconnect(t *testing.T) {
+	m := newTestManager()
+	defer m.Close()
+
+	g := m.GetOrCreate("g1")
+	c := NewClient(newFakeTransport(), g, "client-d", slog.Default())
+	g.register(c)
+	waitActor()
+	c.Disconnect() // 正常掉线：unregister 从 ring 删除
+	waitActor()
+
+	_, err := m.AllocateContext(context.Background(), "g1", "client-d", "")
+	if err == nil {
+		t.Fatal("expected bind miss")
+	}
+	if !strings.Contains(err.Error(), "device disconnected") {
+		t.Fatalf("掉线后应提示刚断过线（旧实现此处只能报查无此设备）: %q", err.Error())
+	}
+}
+
+// 掉线记录有 TTL：超过窗口后不应再提「刚掉线」，避免误导。
+func TestBindMissDowntimeTTL(t *testing.T) {
+	m := newTestManager()
+	defer m.Close()
+	g := m.GetOrCreate("g1")
+
+	g.post(func() {
+		g.markDownLocked("stale")
+		g.down["stale"] = time.Now().Add(-downTTL - time.Minute)
+	})
+	waitActor()
+
+	_, err := m.AllocateContext(context.Background(), "g1", "stale", "")
+	if err == nil {
+		t.Fatal("expected bind miss")
+	}
+	if got, want := err.Error(), "no device found for clientId:stale"; got != want {
+		t.Fatalf("超过 TTL 不应再提掉线: got %q want %q", got, want)
 	}
 }
 

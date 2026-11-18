@@ -54,6 +54,7 @@ function SekiroClient(wsURL, options) {
     this.hbTimer = null;
     this.hbWatchdog = null;
     this.hbHelloTimer = null;
+    this.hbVisibilityHandler = null;
     // 注册地址解析：支持简写形式（options.group + options.clientId 自动拼接），
     // URL 已含 /register 或参数不全时给出明确错误（避免连到根路径握手失败）
     this.wsURL = this._resolveRegisterURL(wsURL, this.opts);
@@ -298,10 +299,14 @@ SekiroClient.prototype.scheduleReconnect = function () {
 // 直到有人刷新页面才回来」。
 //
 // 协议（向后兼容）：
-//   1. 注册地址带 hb=1 → 新服务端立刻回一帧 {"__sekiro_hello__":1,"hb":15}
+//   1. 注册地址带 hb=1 → 新服务端立刻回一帧 {"__sekiro_hello__":1,"hb":10}
 //   2. 客户端收到 hello 后每 hb 秒发 {"__sekiro_hb__":<ts>}，服务端原样回显
-//   3. 连续 3 个周期没有任何下行帧 → 判定半开，主动 close() 触发重连
+//   3. 连续 3 个周期没有任何下行帧 → 判定半开，丢弃旧连接并重建
 //   4. 收不到 hello（旧服务端）= 本连接不发心跳，行为与官方版完全一致
+//
+// 间隔取 10s 而非更长：服务端判死是「写空闲 20s + 等 pong 10s」= 30s，
+// 客户端 3×10s = 30s 与之对齐，避免出现「服务端已把设备移出 group、客户端
+// 还以为自己在线」的空窗。
 
 // _onFrame 收帧入口：先识别两帧控制消息，其余交给业务分发。
 // 用 indexOf 判别而非 JSON.parse —— 业务响应可能是 3MB 大文本，不能为判别
@@ -333,15 +338,17 @@ SekiroClient.prototype._startHeartbeat = function (hintSeconds) {
     }
     this.hbSupported = true;
     logToConsole('sekiro: 应用层心跳已启用（间隔 ' + Math.round(this.hbInterval / 1000) + 's）');
-    this.hbTimer = setInterval(function () {
-        if (!_this.isConnected()) return;
-        try {
-            _this.socket.send(JSON.stringify({ '__sekiro_hb__': Date.now() }));
-        } catch (e) { /* 写失败会由 close 事件接管 */ }
-    }, this.hbInterval);
-    // 看护：3 个周期没有任何下行帧 → 半开，主动断开重连
+    this.hbTimer = setInterval(function () { _this._sendHeartbeat(); }, this.hbInterval);
+
+    // 看护：3 个周期没有任何下行帧 → 半开，丢弃旧连接并重建。
+    // 页面隐藏（后台标签页）时不做判定：浏览器会节流后台页的定时器，误判会把
+    // 健康连接掐掉。此时只把基准时间前移；重新可见时立刻补发一次心跳再开始计。
+    var hidden = function () {
+        return typeof document === 'object' && document.visibilityState === 'hidden';
+    };
     this.hbWatchdog = setInterval(function () {
         if (!_this.isConnected()) return;
+        if (hidden()) { _this.lastRxAt = Date.now(); return; }
         var idle = Date.now() - _this.lastRxAt;
         if (idle > _this.hbInterval * 3) {
             logToConsole('sekiro: 心跳失联 ' + Math.round(idle / 1000) +
@@ -352,16 +359,41 @@ SekiroClient.prototype._startHeartbeat = function (hintSeconds) {
             _this._restart('心跳失联 ' + Math.round(idle / 1000) + 's');
         }
     }, Math.max(1000, Math.floor(this.hbInterval / 3)));
+
+    // 从后台切回前台：后台期间可能已断（系统休眠/网络切换），立刻补一次心跳，
+    // 并重置基准，给对端一个完整的 3 周期窗口再判死。
+    if (typeof document === 'object' && typeof document.addEventListener === 'function') {
+        this.hbVisibilityHandler = function () {
+            if (document.visibilityState === 'hidden') return;
+            _this.lastRxAt = Date.now();
+            _this._sendHeartbeat();
+        };
+        document.addEventListener('visibilitychange', this.hbVisibilityHandler);
+    }
+};
+
+// _sendHeartbeat 发一帧心跳（连接未建立时静默跳过，写失败由 close 事件接管）。
+SekiroClient.prototype._sendHeartbeat = function () {
+    if (!this.isConnected()) return;
+    try {
+        this.socket.send(JSON.stringify({ '__sekiro_hb__': Date.now() }));
+    } catch (e) { /* ignore */ }
 };
 
 SekiroClient.prototype._stopHeartbeat = function () {
     if (this.hbHelloTimer) { clearTimeout(this.hbHelloTimer); this.hbHelloTimer = null; }
     if (this.hbTimer) { clearInterval(this.hbTimer); this.hbTimer = null; }
     if (this.hbWatchdog) { clearInterval(this.hbWatchdog); this.hbWatchdog = null; }
+    if (this.hbVisibilityHandler && typeof document === 'object' &&
+        typeof document.removeEventListener === 'function') {
+        document.removeEventListener('visibilitychange', this.hbVisibilityHandler);
+    }
+    this.hbVisibilityHandler = null;
     this.hbSupported = false;
 };
 
-SekiroClient.prototype.handleSekiroRequest = function (requestJson) {    var request;
+SekiroClient.prototype.handleSekiroRequest = function (requestJson) {
+    var request;
     try {
         request = JSON.parse(requestJson);
     } catch (e) {

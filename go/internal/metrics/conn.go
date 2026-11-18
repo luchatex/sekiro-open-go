@@ -14,6 +14,7 @@ type ConnJSON struct {
 	OnlineNow    int              `json:"onlineNow"`    // 当前在线 provider 数（各 group 求和）
 	RegisterOK   int64            `json:"registerOk"`   // 注册成功次数（含重连）
 	RegisterFail int64            `json:"registerFail"` // 注册失败次数
+	Duplicate    int64            `json:"duplicate"`    // 同 group 同 clientId 顶替次数（重连风暴指标）
 	FailReasons  map[string]int64 `json:"failReasons,omitempty"`
 	ClosedTotal  int64            `json:"closedTotal"`            // 连接终止次数
 	CloseReasons map[string]int64 `json:"closeReasons,omitempty"` // 断开原因分布
@@ -26,6 +27,19 @@ func (r *Recorder) ConnRegisterOK() {
 	}
 	r.mu.Lock()
 	r.connOK++
+	r.mu.Unlock()
+}
+
+// ConnDuplicate 记一次「同 group 同 clientId 的新连接顶替旧连接」。
+//
+// 长期偏高说明客户端在重连风暴（页面重复实例化、读空闲被杀后立刻重连），
+// 是「设备一会儿在、一会儿不在」的常见成因。
+func (r *Recorder) ConnDuplicate() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.connDup++
 	r.mu.Unlock()
 }
 
@@ -64,6 +78,7 @@ func (r *Recorder) connLocked() ConnJSON {
 	out := ConnJSON{
 		RegisterOK:   r.connOK,
 		RegisterFail: r.connFail,
+		Duplicate:    r.connDup,
 		ClosedTotal:  r.connClosed,
 	}
 	if len(r.connFailBy) > 0 {

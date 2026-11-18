@@ -390,10 +390,12 @@ function renderConn(c) {
   if (!c) { el.textContent = "–"; return; }
   const parts = [`注册成功 ${fmtInt(c.registerOk)}`];
   if (c.registerFail) parts.push(`失败 ${fmtInt(c.registerFail)}（${fmtReasons(c.failReasons, 2)}）`);
+  if (c.duplicate) parts.push(`重复注册 ${fmtInt(c.duplicate)}`);
   if (c.closedTotal) parts.push(`断开 ${fmtInt(c.closedTotal)}（${fmtReasons(c.closeReasons, 3)}）`);
   el.textContent = parts.join(" · ");
   el.title = "连接侧统计：自进程启动累计（重启清零）。" +
-    "pong-timeout/read-idle = 服务端心跳判死；read-error = 链路异常；client-closed = 客户端正常关闭。";
+    "pong-timeout/read-idle = 服务端心跳判死；read-error = 链路异常；client-closed = 客户端正常关闭；" +
+    "重复注册 = 同 group 同 clientId 的新连接顶替旧连接（长期偏高说明客户端在重连风暴）。";
 }
 
 // ---------- 趋势图（SVG 堆叠柱） ----------

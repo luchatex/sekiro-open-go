@@ -94,12 +94,16 @@ if (client.isConnected()) { /* 连接可用 */ }
 增强版的做法：
 
 1. 注册地址自动追加 `hb=1`（`heartbeat: false` 可关闭）；
-2. 新服务端会回一帧能力通告 `{"__sekiro_hello__":1,"hb":15}`，客户端据此每 15s 发
+2. 新服务端会回一帧能力通告 `{"__sekiro_hello__":1,"hb":10}`，客户端据此每 10s 发
    `{"__sekiro_hb__":<ts>}`，服务端原样回显；
-3. 连续 **3 个周期**没有任何下行帧 → 判定链路已半开，立刻丢弃旧连接并重连
-   （不等关闭握手，因为关闭帧同样可能传不回来）；
+3. 连续 **3 个周期**（10s × 3 = 30s，与服务端判死时长 20s+10s 对齐）没有任何下行帧
+   → 判定链路已半开，立刻丢弃旧连接并重连（不等关闭握手，因为关闭帧同样可能传不回来）；
 4. 连到**旧服务端**时收不到通告：本连接不发心跳、行为与官方版完全一致，
    不会因未知帧被 4400 踢掉。
+
+两个细节：页面处于**后台标签页**时看护不做判定（浏览器会节流后台定时器，误判会把
+健康连接掐掉），切回前台立刻补发一次心跳再重新计时；`heartbeatInterval` 显式配置时
+优先于服务端建议值。
 
 ```js
 var client = new SekiroClient('wss://sekiro.example.com', {
@@ -108,8 +112,7 @@ var client = new SekiroClient('wss://sekiro.example.com', {
     console.warn('心跳失联 ' + idleMs + 'ms，已自动重连');
   }
 });
-// 特殊网络想更激进地判活：heartbeatInterval: 5000（3 个周期 = 15s 判定）
-```
+// 特殊网络想更激进地判活：heartbeatInterval: 5000（3 个周期 = 15s 判定）```
 
 ### `client.registerAction(action, handler)`
 

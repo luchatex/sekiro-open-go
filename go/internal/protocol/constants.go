@@ -68,9 +68,10 @@ const (
 	// WSHeartbeatKey 应用层心跳帧（无 __sekiro_seq__）的判别键，服务端原样回显。
 	WSHeartbeatKey = "__sekiro_hb__"
 	// WSHeartbeatHintSeconds 能力通告里建议的心跳间隔（秒）。
-	// 取值依据：服务端判死是「写空闲 20s + 等 pong 5s」，15s 的心跳能在
-	// 服务端判死前发现半开（客户端侧感知上限 ≈ 3 个周期 = 45s）。
-	WSHeartbeatHintSeconds = 15
+	// 取值依据：服务端判死是「写空闲 20s + 等 pong 10s」= 30s，客户端按
+	// 3 个周期判活，10s × 3 = 30s 与之对齐——避免出现「服务端已把设备移出
+	// group、客户端还以为在线」的空窗。
+	WSHeartbeatHintSeconds = 10
 	// ResponseStatus 响应状态头（映射 HTTP status）。
 	ResponseStatus = "__status__"
 )
@@ -85,10 +86,12 @@ const (
 var (
 	serverWriteIdle atomic.Int64
 	serverReadIdle  atomic.Int64
+	serverPongWait  atomic.Int64
 )
 
 func init() {
 	SetServerIdle(20*time.Second, 30*time.Second)
+	SetServerPongTimeout(10 * time.Second)
 }
 
 // SetServerIdle 设置 WS/native 心跳的写空闲与读空闲周期（对齐 Java
@@ -98,8 +101,17 @@ func SetServerIdle(write, read time.Duration) {
 	serverReadIdle.Store(int64(read))
 }
 
-func ServerWriteIdle() time.Duration { return time.Duration(serverWriteIdle.Load()) }
-func ServerReadIdle() time.Duration  { return time.Duration(serverReadIdle.Load()) }
+// SetServerPongTimeout 设置发出 Ping 后等待 Pong 的宽限。
+//
+// 取 10s 而非更短：Ping 的等待窗口里包含「等写锁 + 对端处理 + 网络往返」，
+// 浏览器在页面繁忙（长任务、GC、后台节流）时回 Pong 可能延迟到秒级。
+// 5s 窗口实测出现过对健康连接的误杀（判死后连接被强关，客户端只能重连），
+// 而判死总时长由 写空闲 + 该值 决定：20s + 10s = 30s，仍是「分钟内发现」。
+func SetServerPongTimeout(d time.Duration) { serverPongWait.Store(int64(d)) }
+
+func ServerWriteIdle() time.Duration   { return time.Duration(serverWriteIdle.Load()) }
+func ServerReadIdle() time.Duration    { return time.Duration(serverReadIdle.Load()) }
+func ServerPongTimeout() time.Duration { return time.Duration(serverPongWait.Load()) }
 
 const (
 	DefaultInvokeTimeout = 15 * time.Second
