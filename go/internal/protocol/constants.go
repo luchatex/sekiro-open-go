@@ -56,6 +56,21 @@ const (
 	ParamResponse5xxJSON = "__response_5xx_as_json"
 	// WSSeqNumber WebSocket 通道的关联序号字段。
 	WSSeqNumber = "__sekiro_seq__"
+	// WSHeartbeatParam 注册时声明「支持应用层心跳」的 query 参数。
+	//
+	// 浏览器发不了 WS Ping（无此 API），provider 又是純静默端：链路被中间设备
+	// 悄悄切断时，服务端 25s 内靠 Ping 判死，客户端却永远停在 readyState=1，
+	// 业务侧只能看到设备"凭空消失"。声明该参数后服务端才下发能力通告并接受
+	// 心跳帧——不声明则行为与旧版完全一致，老客户端零影响。
+	WSHeartbeatParam = "hb"
+	// WSServerHelloKey 能力通告帧的判别键。仅当注册带 hb=1 时下发一次。
+	WSServerHelloKey = "__sekiro_hello__"
+	// WSHeartbeatKey 应用层心跳帧（无 __sekiro_seq__）的判别键，服务端原样回显。
+	WSHeartbeatKey = "__sekiro_hb__"
+	// WSHeartbeatHintSeconds 能力通告里建议的心跳间隔（秒）。
+	// 取值依据：服务端判死是「写空闲 20s + 等 pong 5s」，15s 的心跳能在
+	// 服务端判死前发现半开（客户端侧感知上限 ≈ 3 个周期 = 45s）。
+	WSHeartbeatHintSeconds = 15
 	// ResponseStatus 响应状态头（映射 HTTP status）。
 	ResponseStatus = "__status__"
 )

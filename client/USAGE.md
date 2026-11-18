@@ -80,6 +80,36 @@ if (client.isConnected()) { /* 连接可用 */ }
 | `options.onReconnect(delayMs)` | – | 每次调度重连时回调，参数为本次等待毫秒数 |
 | `options.onClose(event, humanReason)` | – | 连接关闭回调，`humanReason` 为 code 的中文诊断 |
 | `options.onError(event)` | – | 连接错误回调（细节以 onClose 的 code 为准） |
+| `options.heartbeat` | – | 应用层心跳开关，默认 `true`（连到旧服务端会自动降级，见下节） |
+| `options.heartbeatInterval` | – | 心跳间隔（毫秒），默认取服务端通告值 15000；显式配置后以本值为准 |
+| `options.onHeartbeatLost(idleMs)` | – | 心跳失联判定触发时回调（此时会自动重建连接），`idleMs` 为无下行帧时长 |
+
+### 应用层心跳（半开连接检测）
+
+浏览器没有 WS Ping API，而 provider 平时是纯静默端——链路被中间设备悄悄切断
+（NAT 回收、休眠唤醒、网络切换、网关静默丢流）时，服务端 25s 内就会靠 Ping 判死
+并把设备移出 group，而页面这边**永远停在 `readyState=1`、控制台一条日志都没有**。
+业务侧的表现是「设备凭空消失，直到有人刷新页面才回来」。
+
+增强版的做法：
+
+1. 注册地址自动追加 `hb=1`（`heartbeat: false` 可关闭）；
+2. 新服务端会回一帧能力通告 `{"__sekiro_hello__":1,"hb":15}`，客户端据此每 15s 发
+   `{"__sekiro_hb__":<ts>}`，服务端原样回显；
+3. 连续 **3 个周期**没有任何下行帧 → 判定链路已半开，立刻丢弃旧连接并重连
+   （不等关闭握手，因为关闭帧同样可能传不回来）；
+4. 连到**旧服务端**时收不到通告：本连接不发心跳、行为与官方版完全一致，
+   不会因未知帧被 4400 踢掉。
+
+```js
+var client = new SekiroClient('wss://sekiro.example.com', {
+  group: 'demoGroup', clientId: 'prod-web-1',
+  onHeartbeatLost: function (idleMs) {
+    console.warn('心跳失联 ' + idleMs + 'ms，已自动重连');
+  }
+});
+// 特殊网络想更激进地判活：heartbeatInterval: 5000（3 个周期 = 15s 判定）
+```
 
 ### `client.registerAction(action, handler)`
 
@@ -95,7 +125,7 @@ if (client.isConnected()) { /* 连接可用 */ }
 连接是否可用（`readyState === OPEN`）。发送类操作在未连接时**不会静默丢弃**——
 日志会明示「消息未送达（连接未建立）」。
 
-## 与官方 sekiroWeb.js 的差异（5+2 项）
+## 与官方 sekiroWeb.js 的差异（5+3 项）
 
 | # | 类型 | 内容 |
 |---|---|---|
@@ -104,8 +134,9 @@ if (client.isConnected()) { /* 连接可用 */ }
 | 3 | 增强 | `onOpen` / `onReconnect` / `onClose` / `onError` 四个生命周期钩子 |
 | 4 | 增强 | 大字符串响应仅 `{`/`[` 开头才 `JSON.parse`（3MB 文本省一次昂贵解析） |
 | 5 | 修复 | `sendSuccess` 的 `code` falsy 判断缺陷（`code=0` 不再被误改写） |
-| 6 | 增强 | **连接错误诊断**（本次新增，见下节） |
+| 6 | 增强 | **连接错误诊断**（见下节） |
 | 7 | 增强 | `isConnected()` 状态查询 + 未连接时发送保护（不静默丢消息） |
+| 8 | 增强 | **应用层心跳**（注册带 `hb=1`）：半开链路 3 个周期内发现并重连；旧服务端自动降级 |
 
 ## 连接错误诊断与排查
 

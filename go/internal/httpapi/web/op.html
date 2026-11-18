@@ -204,7 +204,7 @@ a { color: var(--accent); text-decoration: none; }
         <thead><tr>
           <th class="tl">原因</th>
           <th class="tl">说明</th>
-          <th>次数</th>
+          <th>次数<span class="meta" style="font-weight:400">（累计）</span></th>
           <th class="tl">最近发生</th>
         </tr></thead>
         <tbody id="errReasonsBody"></tbody>
@@ -214,7 +214,7 @@ a { color: var(--accent); text-decoration: none; }
       <div class="head" style="padding:12px 18px 6px">
         <h2 style="font-size:13px">高频错误聚合</h2>
         <span class="spacer"></span>
-        <span class="meta">同 group / action / 原因 归为一行，按次数降序</span>
+        <span class="meta" id="errAggMeta">近 24h · 同 group / action / 原因 归为一行，按次数降序</span>
       </div>
       <table>
         <thead><tr>
@@ -261,7 +261,10 @@ a { color: var(--accent); text-decoration: none; }
   <p>系统错误排障：<strong>高频错误聚合</strong>把同 group / action / 原因归为一行，用于识别
      「每分钟固定几条」的规律性失败；<strong>迟到响应</strong> = 服务端已按超时回包后 provider
      才到达的响应（仅作诊断，调用方早已收到 timeout）：迟到只差几秒说明上游「慢」，应调大
-     <code>invoke_timeout</code> 或修客户端超时；迟到几十秒以上说明上游「挂死」，应断链并让调用方重试。</p>
+     <code>invoke_timeout</code> 或修客户端超时；迟到几十秒以上说明上游「挂死」，应断链并让调用方重试。
+     <strong>口径提示</strong>：页面顶部、group 明细与「原因分布」都是<strong>自进程启动累计</strong>；
+     「高频错误聚合」是<strong>近 24h 滑动窗口</strong>（24h 未再发生的条目会自动清理）。
+     两者差距本身是信息——累计几十万而近 24h 只有几千，说明多数是历史事件，不是当前故障。</p>
   <p>连接侧排障（客户端节点右上角）：<strong>注册成功/失败</strong>与<strong>断开原因</strong>自进程启动累计，
      用于回答「客户端到底连上没有」——invoke 指标只覆盖「连上之后」。断开原因中
      <code>pong-timeout</code>/<code>read-idle</code> 是服务端心跳判死（对端不回 pong 或链路半开），
@@ -655,7 +658,9 @@ function renderErrors(d) {
   for (const l of late) maxDelay = Math.max(maxDelay, l.maxDelayMs || 0);
   // 迟到响应是判断「上游只是慢」还是「上游挂死」的关键：超时数相同，
   // 迟到只差几秒 → 该调大 invoke_timeout；迟到几十秒以上 → 挂死，应断链。
-  let meta = `共 ${d.total} 条 · 展示最近 ${d.recent.length} 条`;
+  // 两个口径必须写明：total/原因分布是「自进程启动累计」，高频聚合是「近 24h」
+  // 滑动窗口（24h 未再发生的条目会被清理）。混读会把累计量当成当日量。
+  let meta = `累计 ${d.total} 条（自进程启动）· 展示最近 ${d.recent.length} 条`;
   if (lateTotal > 0) meta += ` · 迟到响应 ${lateTotal} 条（最长 +${(maxDelay / 1000).toFixed(1)}s）`;
   $("errMeta").textContent = meta;
 
@@ -676,11 +681,15 @@ function renderErrors(d) {
   }
   $("errReasonsBody").innerHTML = rh;
 
-  // 高频聚合：同一 group/action/原因 一行，直接看出「每分钟固定几条」的规律
+  // 高频聚合：同一 group/action/原因 一行，直接看出「每分钟固定几条」的规律。
+  // 口径是近 24h（服务端 24h 未再发生即清理），与上方「累计」的差距本身也是信息：
+  // 累计 34 万而近 24h 只有 1 万，说明大部分是历史事件。
   const aggs = d.byAction || [];
   $("errAggEmpty").hidden = aggs.length > 0;
+  let aggSum = 0;
   let ah = "";
   for (const a of aggs) {
+    aggSum += a.count || 0;
     ah += `<tr>
       <td class="tl">${esc(a.group || "–")}</td>
       <td class="tl">${esc(a.action || "–")}</td>
@@ -690,6 +699,7 @@ function renderErrors(d) {
     </tr>`;
   }
   $("errAggBody").innerHTML = ah;
+  $("errAggMeta").textContent = `近 24h 共 ${fmtInt(aggSum)} 条 · 同 group / action / 原因 归为一行，按次数降序`;
 
   let eh = "";
   for (const e of (d.recent || [])) {

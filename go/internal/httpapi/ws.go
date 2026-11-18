@@ -36,6 +36,11 @@ type wsTransport struct {
 	// 场景带宽直接放大 10 倍——必须可观测
 	compressed bool
 
+	// heartbeat 注册时是否声明支持应用层心跳（query hb=1）。
+	// 只有声明过的连接才接受无 __sekiro_seq__ 的心跳帧并回执；未声明时
+	// 行为与旧版完全一致（收到无 seq 的帧一律 4400 关闭），保证老客户端零影响。
+	heartbeat bool
+
 	writeMu    sync.Mutex
 	dead       atomic.Bool
 	deadCh     chan struct{}
@@ -59,6 +64,11 @@ func (t *wsTransport) SendInvoke(params *orderedjson.Map, seq int32) error {
 	if err != nil {
 		return err
 	}
+	return t.writeText(body)
+}
+
+// writeText 单帧文本写（与 SendInvoke 共用写锁，避免心跳/通告帧与 invoke 交错）。
+func (t *wsTransport) writeText(body []byte) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	t.writeMu.Lock()
@@ -142,6 +152,37 @@ func (t *wsTransport) closedReason() string {
 	return ""
 }
 
+// sendHello 下发能力通告（仅注册带 hb=1 时一次）。
+//
+// 为什么需要通告而不是让客户端直接发心跳：老服务端收到无 __sekiro_seq__ 的
+// 帧会以 4400 直接关闭连接。客户端先收到 hello 才启用心跳，连老服务端时
+// 只是「没收到 hello → 不启用」，零抖动、零 4400。
+func (t *wsTransport) sendHello(log *slog.Logger) {
+	body, err := json.Marshal(map[string]any{
+		protocol.WSServerHelloKey: 1,
+		"hb":                      protocol.WSHeartbeatHintSeconds,
+		"serverTime":              time.Now().Unix(),
+	})
+	if err != nil {
+		return
+	}
+	if err := t.writeText(body); err != nil {
+		log.Info("send heartbeat hello failed", "err", err)
+	}
+}
+
+// sendHeartbeatAck 回执应用层心跳（原样回显时间戳，供客户端算 RTT）。
+func (t *wsTransport) sendHeartbeatAck(echo int) {
+	body, err := json.Marshal(map[string]any{
+		protocol.WSHeartbeatKey: echo,
+		"serverTime":            time.Now().Unix(),
+	})
+	if err != nil {
+		return
+	}
+	_ = t.writeText(body)
+}
+
 // wsRegister 处理 WebSocket provider 注册（对齐 ServiceHttp.doWsClientRegister +
 // ServiceWsClient + WsHeartBeatHandler）。
 //
@@ -172,10 +213,15 @@ func wsRegister(w http.ResponseWriter, r *http.Request, mgr *group.Manager, log 
 	// 压缩协商可观测：客户端声明 permessage-deflate 即协商成功（Accept
 	// 固定 ContextTakeover）；未声明通常是前置代理剥了扩展头
 	compressed := strings.Contains(r.Header.Get("Sec-WebSocket-Extensions"), "permessage-deflate")
-	tr := &wsTransport{conn: conn, peer: r.RemoteAddr, compressed: compressed, deadCh: make(chan struct{})}
+	hb := q.Get(protocol.WSHeartbeatParam) == "1"
+	tr := &wsTransport{conn: conn, peer: r.RemoteAddr, compressed: compressed,
+		heartbeat: hb, deadCh: make(chan struct{})}
 	cl := group.NewClient(tr, g, clientID, log)
 	g.Register(cl)
 	metrics.Default().ConnRegisterOK()
+	if hb {
+		tr.sendHello(log)
+	}
 	log.Info("ws client registered", "group", gName, "clientId", clientID,
 		"compression", tr.Compression())
 	wsServe(cl, tr, log)
@@ -356,6 +402,12 @@ func wsHandleMessage(cl *group.Client, tr *wsTransport, data []byte, log *slog.L
 	}
 	seq := msg.GetInt(protocol.WSSeqNumber)
 	if seq <= 0 {
+		// 应用层心跳：仅对注册时声明 hb=1 的连接放行（回执后保持连接）。
+		// 未声明的连接仍按原逻辑 4400 关闭，与旧版/Java 行为一致。
+		if tr.heartbeat && msg.Has(protocol.WSHeartbeatKey) {
+			tr.sendHeartbeatAck(msg.GetInt(protocol.WSHeartbeatKey))
+			return true
+		}
 		log.Warn("serial number not set for client!!")
 		metrics.Default().ConnClosed("bad-seq")
 		tr.closeWith(wsCloseBadRequest, "serial number not set for client!!")

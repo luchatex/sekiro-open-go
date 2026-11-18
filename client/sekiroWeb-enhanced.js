@@ -38,6 +38,22 @@ function SekiroClient(wsURL, options) {
     this.socket = null;
     this.reconnectDelay = 1000;
     this.opts = options || {};
+    // 应用层心跳（半开连接检测）：
+    //   浏览器发不了 WS Ping（无此 API），provider 又是纯静默端——链路被中间
+    //   设备悄悄切断时，服务端 25s 内靠 Ping 判死，客户端却永远停在
+    //   readyState=1，业务侧只看到设备"凭空消失"。这里用应用层心跳补上：
+    //   注册时声明 hb=1，服务端回一帧 hello 后开始按周期发心跳；
+    //   连续 3 个周期没有任何下行帧即判定半开，主动重连。
+    //   老服务端不会回 hello，本连接自动降级为「不发心跳」，行为与旧版一致。
+    this.hbEnabled = this.opts.heartbeat !== false;
+    this.hbSupported = false;
+    this.hbInterval = this.opts.heartbeatInterval || 15000;
+    // 显式配置的间隔优先于服务端建议值（测试/特殊网络下需要更短的判活周期）
+    this.hbIntervalFixed = !!this.opts.heartbeatInterval;
+    this.lastRxAt = 0;
+    this.hbTimer = null;
+    this.hbWatchdog = null;
+    this.hbHelloTimer = null;
     // 注册地址解析：支持简写形式（options.group + options.clientId 自动拼接），
     // URL 已含 /register 或参数不全时给出明确错误（避免连到根路径握手失败）
     this.wsURL = this._resolveRegisterURL(wsURL, this.opts);
@@ -52,18 +68,26 @@ function SekiroClient(wsURL, options) {
 //   2. 基础地址 + options.group / options.clientId —— 自动拼接 /business/register
 // 两者都不满足时构造即抛错（否则会连到根路径，握手失败 code=1006 且无从排查）。
 SekiroClient.prototype._resolveRegisterURL = function (wsURL, opts) {
-    if (/\/register(\?|$)/i.test(wsURL)) return wsURL;
-    var group = opts.group, clientId = opts.clientId;
-    if (group && clientId) {
-        return wsURL.replace(/\/+$/, '') +
-            '/business/register?group=' + encodeURIComponent(group) +
-            '&clientId=' + encodeURIComponent(clientId);
+    var url = /\/register(\?|$)/i.test(wsURL) ? wsURL : null;
+    if (!url) {
+        var group = opts.group, clientId = opts.clientId;
+        if (group && clientId) {
+            url = wsURL.replace(/\/+$/, '') +
+                '/business/register?group=' + encodeURIComponent(group) +
+                '&clientId=' + encodeURIComponent(clientId);
+        } else {
+            throw new Error(
+                'sekiro: wsURL "' + wsURL + '" 不是注册地址。两种写法二选一：\n' +
+                '  1) 完整注册地址：new SekiroClient("' + wsURL + '/business/register?group=yourGroup&clientId=yourId")\n' +
+                '  2) 基础地址 + 参数：new SekiroClient("' + wsURL + '", { group: "yourGroup", clientId: "yourId" })'
+            );
+        }
     }
-    throw new Error(
-        'sekiro: wsURL "' + wsURL + '" 不是注册地址。两种写法二选一：\n' +
-        '  1) 完整注册地址：new SekiroClient("' + wsURL + '/business/register?group=yourGroup&clientId=yourId")\n' +
-        '  2) 基础地址 + 参数：new SekiroClient("' + wsURL + '", { group: "yourGroup", clientId: "yourId" })'
-    );
+    // 声明支持应用层心跳：服务端据此下发能力通告，老服务端会忽略该参数
+    if (this.hbEnabled) {
+        url += (url.indexOf('?') >= 0 ? '&' : '?') + 'hb=1';
+    }
+    return url;
 };
 
 function logToConsole(msg) {
@@ -163,6 +187,7 @@ SekiroClient.prototype.resolveWebSocketFactory = function () {
 SekiroClient.prototype.connect = function () {
     logToConsole('sekiro: begin of connect to wsURL: ' + this.wsURL);
     var _this = this;
+    this._stopHeartbeat(); // 重连前先清掉上一轮的定时器，避免叠加
     try {
         this.socket = this.webSocketFactory(this.wsURL);
     } catch (e) {
@@ -171,20 +196,38 @@ SekiroClient.prototype.connect = function () {
         return;
     }
 
+    // 用局部变量固化本连接：重连/强制重建后，旧 socket 迟到的 close 事件
+    // 必须被丢弃，否则会触发二次重连（半开场景下 close 事件可能很久才到）。
+    var sock = this.socket;
+
     // 浏览器 WebSocket 自动回 Pong，无需（也不应）应用层处理 Ping
-    this.socket.onmessage(function (event) {
-        _this.handleSekiroRequest(event.data);
+    sock.onmessage(function (event) {
+        if (_this.socket !== sock) return;
+        _this._onFrame(event.data);
     });
 
-    this.socket.onopen(function () {
+    sock.onopen(function () {
+        if (_this.socket !== sock) return;
         logToConsole('sekiro: connection opened');
         _this.reconnectDelay = 1000; // 连接成功后重置退避
+        _this.lastRxAt = Date.now();
+        if (_this.hbEnabled) {
+            // 3s 内没收到能力通告 = 对端是旧版本服务端，本连接不发心跳，
+            // 行为退回与官方版一致（不会触发 4400 被踢）
+            _this.hbHelloTimer = setTimeout(function () {
+                if (!_this.hbSupported && _this.isConnected()) {
+                    logToConsole('sekiro: 服务端未下发心跳通告（旧版本），本次连接不启用应用层心跳');
+                }
+            }, 3000);
+        }
         if (typeof _this.opts.onOpen === 'function') {
             try { _this.opts.onOpen(); } catch (e) { /* ignore */ }
         }
     });
 
-    this.socket.onclose(function (event) {
+    sock.onclose(function (event) {
+        if (_this.socket !== sock) return; // 已被强制重建，旧连接的收尾事件忽略
+        _this._stopHeartbeat();
         var reason = describeCloseEvent(event);
         var hint = (event && event.code === 1006) ? _this._loopbackHint() : '';
         logToConsole('sekiro: disconnected, ' + reason + ', schedule reconnect' + hint);
@@ -194,13 +237,32 @@ SekiroClient.prototype.connect = function () {
         _this.scheduleReconnect();
     });
 
-    this.socket.onerror = function (event) {
+    sock.onerror = function (event) {
+        if (_this.socket !== sock) return;
         // 浏览器不暴露错误细节（安全策略），诊断信息以紧随其后的 close code 为准
         logToConsole('sekiro: connection error（细节见紧随其后的 close 日志，1006=服务端不可达，1015=TLS 证书问题）');
         if (typeof _this.opts.onError === 'function') {
             try { _this.opts.onError(event); } catch (e) { /* ignore */ }
         }
     };
+};
+
+// _restart 丢弃当前连接并立刻重连。
+//
+// 与 scheduleReconnect 的区别：用于「连接已被判定为假活/半开」的场景——
+// 此时 socket.close() 的关闭握手也可能永远收不到对端回应（同样的半开），
+// 不能等 onclose 再重连。这里先摘掉引用（旧连接的迟到事件因此被忽略），
+// 再新开连接；新连接失败会走正常的退避流程。
+SekiroClient.prototype._restart = function (why) {
+    this._stopHeartbeat();
+    var old = this.socket;
+    this.socket = null;
+    if (old) {
+        try { old.close(); } catch (e) { /* ignore */ }
+    }
+    logToConsole('sekiro: 主动重建连接（' + why + '）');
+    this.reconnectDelay = 1000;
+    this.connect();
 };
 
 // isConnected 当前连接是否可用（readyState === OPEN）。
@@ -228,8 +290,78 @@ SekiroClient.prototype.scheduleReconnect = function () {
     }, delay);
 };
 
-SekiroClient.prototype.handleSekiroRequest = function (requestJson) {
-    var request;
+// ---- 应用层心跳（半开连接检测）----
+//
+// 背景：浏览器没有 WS Ping API，服务端每 20s 发的 Ping 只能证明「服务端还活着」，
+// 客户端无从判断链路是否已断。链路被中间设备静默切断时，服务端 25s 内就判死并
+// 把设备移出 group，客户端却永远停在 readyState=1 —— 业务侧看到「设备凭空消失，
+// 直到有人刷新页面才回来」。
+//
+// 协议（向后兼容）：
+//   1. 注册地址带 hb=1 → 新服务端立刻回一帧 {"__sekiro_hello__":1,"hb":15}
+//   2. 客户端收到 hello 后每 hb 秒发 {"__sekiro_hb__":<ts>}，服务端原样回显
+//   3. 连续 3 个周期没有任何下行帧 → 判定半开，主动 close() 触发重连
+//   4. 收不到 hello（旧服务端）= 本连接不发心跳，行为与官方版完全一致
+
+// _onFrame 收帧入口：先识别两帧控制消息，其余交给业务分发。
+// 用 indexOf 判别而非 JSON.parse —— 业务响应可能是 3MB 大文本，不能为判别
+// 多解析一次。
+SekiroClient.prototype._onFrame = function (data) {
+    this.lastRxAt = Date.now();
+    if (typeof data === 'string') {
+        if (data.indexOf('"__sekiro_hello__"') >= 0 && data.length < 200) {
+            var hello;
+            try { hello = JSON.parse(data); } catch (e) { hello = null; }
+            if (hello && hello['__sekiro_hello__']) {
+                this._startHeartbeat(hello['hb']);
+                return;
+            }
+        }
+        if (data.indexOf('"__sekiro_hb__"') >= 0 && data.length < 200) {
+            return; // 心跳回执：lastRxAt 已刷新，无需业务处理
+        }
+    }
+    this.handleSekiroRequest(data);
+};
+
+// _startHeartbeat 收到 hello 后启动心跳与看护。
+SekiroClient.prototype._startHeartbeat = function (hintSeconds) {
+    var _this = this;
+    this._stopHeartbeat();
+    if (!this.hbIntervalFixed && hintSeconds && hintSeconds >= 3 && hintSeconds <= 120) {
+        this.hbInterval = hintSeconds * 1000;
+    }
+    this.hbSupported = true;
+    logToConsole('sekiro: 应用层心跳已启用（间隔 ' + Math.round(this.hbInterval / 1000) + 's）');
+    this.hbTimer = setInterval(function () {
+        if (!_this.isConnected()) return;
+        try {
+            _this.socket.send(JSON.stringify({ '__sekiro_hb__': Date.now() }));
+        } catch (e) { /* 写失败会由 close 事件接管 */ }
+    }, this.hbInterval);
+    // 看护：3 个周期没有任何下行帧 → 半开，主动断开重连
+    this.hbWatchdog = setInterval(function () {
+        if (!_this.isConnected()) return;
+        var idle = Date.now() - _this.lastRxAt;
+        if (idle > _this.hbInterval * 3) {
+            logToConsole('sekiro: 心跳失联 ' + Math.round(idle / 1000) +
+                's（超过 3 个周期），判定连接已半开，主动重连');
+            if (typeof _this.opts.onHeartbeatLost === 'function') {
+                try { _this.opts.onHeartbeatLost(idle); } catch (e) { /* ignore */ }
+            }
+            _this._restart('心跳失联 ' + Math.round(idle / 1000) + 's');
+        }
+    }, Math.max(1000, Math.floor(this.hbInterval / 3)));
+};
+
+SekiroClient.prototype._stopHeartbeat = function () {
+    if (this.hbHelloTimer) { clearTimeout(this.hbHelloTimer); this.hbHelloTimer = null; }
+    if (this.hbTimer) { clearInterval(this.hbTimer); this.hbTimer = null; }
+    if (this.hbWatchdog) { clearInterval(this.hbWatchdog); this.hbWatchdog = null; }
+    this.hbSupported = false;
+};
+
+SekiroClient.prototype.handleSekiroRequest = function (requestJson) {    var request;
     try {
         request = JSON.parse(requestJson);
     } catch (e) {
