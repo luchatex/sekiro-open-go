@@ -7,9 +7,10 @@
 产物与镜像随 `v*` 标签自动构建发布，各版本下载见
 [Releases](https://github.com/luchatex/sekiro-open-go/releases)。
 
-## [Unreleased]
+## [v1.1.0] - 2026-11-19
 
-以「连不上也看得见」为主的一轮可诊断性修复：起因是线上 js-client 报
+发布镜像：`ghcr.io/luchatex/sekiro-open-go:1.1.0`（同时生成 `1.1`）。
+以「连不上也看得见」为主的一个特性版本：起因是线上 js-client 报
 `no device found for clientId:x`，而设备其实在线——只是注册在另一个 group；
 服务端文案无法区分「设备在别组在线 / group 不存在 / 设备已掉线」，且连接侧
 （握手、注册、断开）完全没有埋点，只能人工 curl 试探。
@@ -17,25 +18,26 @@
 ### 新增
 
 - **应用层心跳**（WS 注册带 `hb=1`，增强客户端默认启用）：服务端先回一帧
-  `{"__sekiro_hello__":1,"hb":15}`，之后客户端定期发 `{"__sekiro_hb__":<ts>}`
+  `{"__sekiro_hello__":1,"hb":10}`，之后客户端定期发 `{"__sekiro_hb__":<ts>}`
   并由服务端回显；连续 3 个周期没有任何下行帧即判定链路半开，主动丢弃旧连接
   重连。解决的是「浏览器没有 WS Ping API，provider 又是纯静默端」——半开链路上
-  服务端 25s 内就判死并移出 group，页面却永远停在 `readyState=1`，业务侧只看到
+  服务端 30s 内就判死并移出 group，页面却永远停在 `readyState=1`，业务侧只看到
   设备凭空消失。未声明 `hb=1` 的连接行为完全不变；新客户端遇到老服务端（不下发
   通告）自动降级为不发心跳。
 - **连接侧统计**（`/op/api/stats` 的 `conn` 字段，监控页「客户端节点」右上角）：
-  在线数、注册成功/失败（失败原因 `param-missing` / `accept-error`）、连接终止
-  次数与断开原因（`pong-timeout` / `read-idle` / `read-error` / `client-closed` /
-  `bad-frame` / `bad-json` / `bad-seq`）。invoke 指标只覆盖「连上之后」，
-  这一组补上「客户端到底连上没有」。
+  在线数、注册成功/失败（失败原因 `param-missing` / `accept-error`）、重复注册次数、
+  连接终止次数与断开原因（`pong-timeout` / `read-idle` / `read-error` /
+  `client-closed` / `bad-frame` / `bad-json` / `bad-seq`）。invoke 指标只覆盖
+  「连上之后」，这一组补上「客户端到底连上没有」。
 
 ### 修复
 
 - **`bind_client` 失败文案带归属**：错误信息保留 `no device found for clientId:x`
   前缀（兼容按前缀匹配的调用方），尾部追加三种成因的区分——该 clientId 在线于
   哪个 group（`device online in group "ws_list"`）、指定的 group 是否存在
-  （`group "y" not found`）、设备是否刚掉线（`device disconnected`）；同时在
-  服务端打一条 `bind_client miss: device online in another group` 的 Warn 日志。
+  （`group "y" not found`）、设备是否刚掉线（`device disconnected 12s ago`，
+  掉线记录保留 5 分钟）；同时在服务端打一条
+  `bind_client miss: device online in another group` 的 Warn 日志。
 - **真实断线日志此前是死代码**：读循环在 `tr.read` 返回错误后才判断
   `tr.Active()`，而 `read` 出错时已自行 `markDead`，该分支恒为假——生产 Info
   级别下「对端断开/网络中断」一条日志都不会有，只剩看护主动关闭的两条，排查时
