@@ -7,7 +7,12 @@
 产物与镜像随 `v*` 标签自动构建发布，各版本下载见
 [Releases](https://github.com/luchatex/sekiro-open-go/releases)。
 
-## [Unreleased]
+## [v1.1.1] - 2026-11-23
+
+发布镜像：`ghcr.io/luchatex/sekiro-open-go:1.1.1`（同时生成 `1.1`）。
+以「降低内存峰值 + 可观测性收尾」为主的补丁版本：每连接嗅探缓冲降到 8KB、
+gzip 状态对象池化、单帧上限收紧到默认 16MB；监控页最近事件表格不再撑出卡片，
+并补上 README 请求链路示意图。
 
 ### 新增
 
