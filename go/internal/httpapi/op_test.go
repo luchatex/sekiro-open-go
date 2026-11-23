@@ -181,6 +181,26 @@ func findGroup(t *testing.T, s statsJSON, name string) int {
 	return -1
 }
 
+// fetchStatsEventually 等待终结埋点落账。Record.deliver 先写响应并 close(sink)，
+// 再调用 finishMetric；handler 看到 close 后立即返回，-race 下调度更慢，测试若
+// 立刻拉 stats 会偶发看到 total=1/success=0。这是观测时序而非业务错误，测试侧
+// 做有界等待即可，不为埋点顺序改动生产响应链。
+func fetchStatsEventually(t *testing.T, h http.Handler, groupName string, wantSuccess int64) statsJSON {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s := fetchStats(t, h)
+		i := findGroup(t, s, groupName)
+		if s.Groups[i].Metrics.Success >= wantSuccess {
+			return s
+		}
+		if time.Now().After(deadline) {
+			return s // 让后续断言给出具体差异
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestOpStatsEndToEnd(t *testing.T) {
 	metrics.Reset()
 	mgr := group.NewManager(slog.Default())
@@ -195,7 +215,7 @@ func TestOpStatsEndToEnd(t *testing.T) {
 		t.Fatalf("invoke resp: %d %s", rec.Code, rec.Body.String())
 	}
 
-	s := fetchStats(t, h)
+	s := fetchStatsEventually(t, h, "demo-group", 1)
 	i := findGroup(t, s, "demo-group")
 	g := s.Groups[i]
 	if g.Clients != 1 {
