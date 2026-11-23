@@ -94,6 +94,24 @@ tr.row.open .expand { transform: rotate(90deg); }
 .spark { display: block; }
 .sub { margin: 0; padding: 8px 18px 14px 46px; }
 .sub th { border-bottom: 1px solid var(--border); }
+/* 最近事件：固定列宽 + 单元格省略，避免长 message / params 把整张表撑出卡片。
+   全文仍保留在 title 与点击展开的详情行里，不会因为省略而丢失信息。 */
+.events { table-layout: fixed; }
+.events th, .events td { overflow: hidden; text-overflow: ellipsis; }
+.events .e-time   { width: 78px; }
+.events .e-group  { width: 11%; }
+.events .e-action { width: 12%; }
+.events .e-reason { width: 13%; }
+.events .e-msg    { width: auto; }
+.events .e-params { width: 16%; }
+.events .e-cid    { width: 11%; }
+.events .e-ch     { width: 72px; }
+/* 窄屏优先保留时间/原因/详情/clientId；参数默认关闭，通道信息价值最低 */
+@media (max-width: 900px) {
+  .events .e-params, .events .e-ch { display: none; }
+}
+.event-detail > div { white-space: normal; overflow-wrap: anywhere; margin: 2px 0; }
+.event-detail b { color: var(--muted); font-weight: 500; margin-right: 6px; }
 footer { max-width: 1240px; margin: 20px auto 0; padding: 0 24px;
   color: var(--muted); font-size: 12px; }
 footer p { margin: 4px 0; }
@@ -234,16 +252,16 @@ a { color: var(--accent); text-decoration: none; }
         <span class="spacer"></span>
         <span class="meta" id="errParamHint">–</span>
       </div>
-      <table>
+      <table class="events">
         <thead><tr>
-          <th class="tl">时间</th>
-          <th class="tl">group</th>
-          <th class="tl">action</th>
-          <th class="tl">原因</th>
-          <th class="tl">详情</th>
-          <th class="tl">参数</th>
-          <th class="tl">clientId</th>
-          <th>通道</th>
+          <th class="tl e-time">时间</th>
+          <th class="tl e-group">group</th>
+          <th class="tl e-action">action</th>
+          <th class="tl e-reason">原因</th>
+          <th class="tl e-msg">详情</th>
+          <th class="tl e-params">参数</th>
+          <th class="tl e-cid">clientId</th>
+          <th class="e-ch">通道</th>
         </tr></thead>
         <tbody id="errRecentBody"></tbody>
       </table>
@@ -653,7 +671,11 @@ async function pollErrors() {
   } catch (e) { $("errMeta").textContent = "拉取失败"; }
 }
 
+// 最近事件：列宽固定后长文案靠省略号收起，点击行展开全文（与 Group 明细一致）。
+let expandedErr = new Set();
+let lastErrorsData = null;
 function renderErrors(d) {
+  lastErrorsData = d;
   const late = d.late || [];
   const lateTotal = d.lateTotal || 0;
   let maxDelay = 0;
@@ -705,18 +727,35 @@ function renderErrors(d) {
 
   let eh = "";
   for (const e of (d.recent || [])) {
-    eh += `<tr>
-      <td class="tl" title="${e.time}">${fmtAgoSec(e.time)}</td>
-      <td class="tl">${esc(e.group || "–")}</td>
-      <td class="tl">${esc(e.action || "–")}</td>
-      <td class="tl">${reasonBadge(e.reason)}</td>
-      <td class="tl" title="${esc(e.message || "")}">${esc(errMsgZh(e.message))}</td>
-      <td class="tl" title="${esc(e.params || "")}" style="max-width:280px;overflow:hidden;text-overflow:ellipsis">${esc(e.params || "–")}</td>
-      <td class="tl">${esc(e.clientId || "–")}</td>
-      <td>${esc(e.channel || "–")}</td>
+    // 以整条事件做 key：轮询间隔内列表会重排，不能按下标记住展开行。
+    const key = [e.time, e.group, e.action, e.reason, e.message, e.params, e.clientId].join("|");
+    const open = expandedErr.has(key);
+    eh += `<tr class="row ${open ? "open" : ""}" data-err="${esc(key)}" title="点击展开完整详情">
+      <td class="tl e-time" title="${e.time}">${fmtAgoSec(e.time)}</td>
+      <td class="tl e-group" title="${esc(e.group || "")}">${esc(e.group || "–")}</td>
+      <td class="tl e-action" title="${esc(e.action || "")}">${esc(e.action || "–")}</td>
+      <td class="tl e-reason" title="${esc(e.reason || "")}">${reasonBadge(e.reason)}</td>
+      <td class="tl e-msg" title="${esc(e.message || "")}">${esc(errMsgZh(e.message))}</td>
+      <td class="tl e-params" title="${esc(e.params || "")}">${esc(e.params || "–")}</td>
+      <td class="tl e-cid" title="${esc(e.clientId || "")}">${esc(e.clientId || "–")}</td>
+      <td class="e-ch">${esc(e.channel || "–")}</td>
     </tr>`;
+    if (open) {
+      eh += `<tr class="detail"><td colspan="8"><div class="sub event-detail">
+        <div><b>详情</b>${esc(e.message || "–")}</div>
+        <div><b>参数</b>${esc(e.params || "–")}</div>
+        <div class="meta">clientId ${esc(e.clientId || "–")} · 通道 ${esc(e.channel || "–")} · ${esc(e.time)}</div>
+      </div></td></tr>`;
+    }
   }
   $("errRecentBody").innerHTML = eh;
+  $("errRecentBody").querySelectorAll("tr[data-err]").forEach((tr) => {
+    tr.addEventListener("click", () => {
+      const k = tr.dataset.err;
+      expandedErr.has(k) ? expandedErr.delete(k) : expandedErr.add(k);
+      renderErrors(lastErrorsData);
+    });
+  });
 }
 
 // ---------- 主渲染 ----------

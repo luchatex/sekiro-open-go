@@ -7,6 +7,14 @@
 产物与镜像随 `v*` 标签自动构建发布，各版本下载见
 [Releases](https://github.com/luchatex/sekiro-open-go/releases)。
 
+## [Unreleased]
+
+### 修复
+
+- **监控页「最近事件」表格不再撑出卡片**：固定列宽并对长 `message` / `params`
+  做省略号截断，窄屏（≤900px）自动隐藏优先级最低的参数与通道列；点击任意事件行
+  可展开完整详情（原文与参数均可读），不再因为省略而丢信息。
+
 ## [v1.1.0] - 2026-11-19
 
 发布镜像：`ghcr.io/luchatex/sekiro-open-go:1.1.0`（同时生成 `1.1`）。
