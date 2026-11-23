@@ -35,10 +35,13 @@ type Config struct {
 	// 用于定位「反复失败的同一条请求」。默认关闭以免业务参数（爬取 URL、
 	// 文书 ID 等）进入监控数据。
 	OpErrParams bool
+	// MaxFrameMB 单帧/请求体上限（MiB），默认 16。业务大文本通常 <10MB，
+	// 16MB 留约 60% 余量；确实需要更大时用 SEKIRO_MAX_FRAME_MB / -max-frame-mb 调整。
+	MaxFrameMB int
 }
 
 func Load() *Config {
-	c := &Config{Port: 5612, TLSPort: 5613}
+	c := &Config{Port: 5612, TLSPort: 5613, MaxFrameMB: 16}
 	if v := os.Getenv("SEKIRO_PORT"); v != "" {
 		if p, err := strconv.Atoi(v); err == nil {
 			c.Port = p
@@ -70,6 +73,11 @@ func Load() *Config {
 	if v := os.Getenv("SEKIRO_OP_ERR_PARAMS"); v == "true" || v == "1" {
 		c.OpErrParams = true
 	}
+	if v := os.Getenv("SEKIRO_MAX_FRAME_MB"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.MaxFrameMB = n
+		}
+	}
 	flag.IntVar(&c.Port, "port", c.Port, "sekiro server listen port")
 	flag.BoolVar(&c.LocalDebug, "debug", c.LocalDebug, "local debug mode")
 	flag.StringVar(&c.LogLevel, "log-level", c.LogLevel, "log level: debug, info, warn or error (default info)")
@@ -79,8 +87,22 @@ func Load() *Config {
 	flag.IntVar(&c.TLSPort, "tls-port", c.TLSPort, "TLS listen port (wss)")
 	flag.StringVar(&c.OpPassword, "op-password", c.OpPassword, "password for /op monitor paths (empty = no auth)")
 	flag.BoolVar(&c.OpErrParams, "op-err-params", c.OpErrParams, "attach request params digest to system error events (sensitive)")
+	flag.IntVar(&c.MaxFrameMB, "max-frame-mb", c.MaxFrameMB, "max single frame / request body size in MiB (default 16)")
 	flag.Parse()
+	// 非法值（负数/0，包括命令行显式传入）回退默认，上限 1GiB 防止误配成天文数字。
+	if c.MaxFrameMB <= 0 || c.MaxFrameMB > 1024 {
+		c.MaxFrameMB = 16
+	}
 	return c
+}
+
+// MaxFrameBytes 返回配置对应的字节数；零值 Config 也走默认 16MB。
+func (c *Config) MaxFrameBytes() int64 {
+	mb := c.MaxFrameMB
+	if mb <= 0 || mb > 1024 {
+		mb = 16
+	}
+	return int64(mb) << 20
 }
 
 // SlogLevel 将配置映射为 slog 级别。优先级：-debug > -log-level > 默认 Info。

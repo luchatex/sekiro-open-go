@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"sync/atomic"
 
 	"github.com/golang/snappy"
@@ -32,12 +33,12 @@ type Compressor interface {
 // MaxDecompressedBytes 单次解压的字节上限（zip bomb 防护，第一道）。
 //
 // 为什么需要：解压是压缩的逆运算，放大比可达数百倍（实测 gzip 510x、
-// snappy 21x）。帧上限 protocol.MaxFrameBytes 为 64MB，一个 64MB 的
-// 压缩响应包理论可膨胀到数十 GB，把服务端 OOM 掉。原实现用 io.ReadAll
+// snappy 21x）。帧上限 protocol.MaxFrameBytes() 默认 16MB（可配置），
+// 一个上限大小的压缩响应包理论可膨胀到数十 GB，把服务端 OOM 掉。原实现用 io.ReadAll
 // 无上限读取，provider 客户端（注册即被信任）返回一枚压缩炸弹即可
 // 远程触发。
 //
-// 取 128MB 的考量：常规业务响应远小于此（HTTP 聚合器上限 32MB），
+// 取 128MB 的考量：常规业务响应远小于此（单帧上限默认 16MB），
 // 留 4倍余量避免误伤合法大响应；超限则返回明确错误而非静默截断
 // （静默截断产生数据不一致，比报错更难排查）。
 const MaxDecompressedBytes = 128 << 20
@@ -85,6 +86,23 @@ func reserveDecompress(n int64) error {
 
 func releaseDecompress(n int64) { inFlight.Add(-n) }
 
+// gzip.Writer / gzip.Reader 内部持有 deflate 状态（哈希表和历史窗口，量级
+// 数十 KB），每次请求新建会给 GC 制造无谓压力。这里池化状态对象，
+// bytes.Buffer 与解压结果仍按调用分配并返回给调用方，避免跨所有权复用
+// 造成数据竞争。flate 状态固定大小，不存在「大缓冲常驻」风险；真正会随
+// 响应变大的 result buffer 不进池。
+//
+// snappy.Encode/Decode 只写入调用方提供的 dst，内部没有可复用的状态对象，
+// 池化 dst 又必须复制一份结果（净分配不变、多一次拷贝），因此不设池。
+var (
+	gzipWriterPool = sync.Pool{New: func() any {
+		w, _ := gzip.NewWriterLevel(io.Discard, gzip.DefaultCompression)
+		return w
+	}}
+	gzipReaderPool = sync.Pool{New: func() any { return new(gzip.Reader) }}
+	chunkPool      = sync.Pool{New: func() any { return make([]byte, decompressChunk) }}
+)
+
 // Gzip 对齐 GzipCompressor。写入 OS=0 字节以对齐 Java GZIPOutputStream 头
 // （MTIME=0/XFL=0/OS=0）；解压方向与任何标准 gzip 流互通。
 type Gzip struct{}
@@ -93,11 +111,10 @@ func (Gzip) Method() string { return protocol.CompressGzip }
 
 func (Gzip) Compress(data []byte) ([]byte, error) {
 	var buf bytes.Buffer
-	w, err := gzip.NewWriterLevel(&buf, gzip.DefaultCompression)
-	if err != nil {
-		return nil, err
-	}
-	w.Header.OS = 0 // Java GZIPOutputStream 写 OS=0
+	w := gzipWriterPool.Get().(*gzip.Writer)
+	w.Reset(&buf)
+	w.Header.OS = 0 // Java GZIPOutputStream 写 OS=0（Reset 会重置 Header）
+	defer gzipWriterPool.Put(w)
 	if _, err := w.Write(data); err != nil {
 		return nil, err
 	}
@@ -129,13 +146,17 @@ func (Gzip) Decompress(data []byte) ([]byte, error) {
 		}
 	}
 
-	r, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
+	zr := gzipReaderPool.Get().(*gzip.Reader)
+	if err := zr.Reset(bytes.NewReader(data)); err != nil {
+		// Reset 失败时对象状态不可信，不归还池，交给 GC。
 		return nil, err
 	}
-	defer r.Close()
+	defer func() {
+		_ = zr.Close()
+		gzipReaderPool.Put(zr)
+	}()
 	// 第二道：流式兜底。ISIZE 可伪造（且可回绕），真实解压量仍须逐块校验。
-	out, n, err := readChunked(r)
+	out, n, err := readChunked(zr)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +178,8 @@ const decompressChunk = 64 << 10
 // 占位前制造巨额分配。合法大响应依靠 append 倍增扩容，开销可接受。
 func readChunked(r io.Reader) ([]byte, int64, error) {
 	buf := make([]byte, 0, decompressChunk)
-	chunk := make([]byte, decompressChunk)
+	chunk := chunkPool.Get().([]byte)
+	defer chunkPool.Put(chunk)
 	var reserved int64
 	defer func() { releaseDecompress(reserved) }()
 

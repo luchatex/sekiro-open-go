@@ -35,6 +35,8 @@ services:
       # /op 监控路径密码保护：宿主机 .env 定义 OP_PASSWORD 后启用
       # （未定义则不启用鉴权；连续登录失败 3 次锁定来源 IP 2 分钟）
       SEKIRO_OP_PASSWORD: "${OP_PASSWORD:-}"
+      # 单帧 / HTTP body / WS 帧上限（MiB）：默认 16，业务大文本 >16MB 时调大
+      SEKIRO_MAX_FRAME_MB: "${SEKIRO_MAX_FRAME_MB:-16}"
       # Go runtime 软内存目标：接近该值时 GC 更积极，但不阻止继续分配。
       # 只作为 4GB 容器硬限制前的缓冲，不是泄漏修复；按容器限制的约 75% 设置。
       GOMEMLIMIT: "${GOMEMLIMIT:-3GiB}"

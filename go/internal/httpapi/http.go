@@ -33,7 +33,6 @@ import (
 const (
 	contentTypeJSON = "application/json"
 	contentTypeForm = "application/x-www-form-urlencoded"
-	maxBodyBytes    = 1 << 25 // 32MB，对齐 HttpObjectAggregator
 )
 
 // Handler 返回 HTTP API 处理器。
@@ -267,7 +266,7 @@ var bodyReadTimeout = 60 * time.Second
 //
 // 读完立即清除 deadline：其后的响应期是 15s+ 长轮询，必须无读限制。
 func readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
-	return readBodyLimited(w, r, maxBodyBytes)
+	return readBodyLimited(w, r, protocol.MaxFrameBytes())
 }
 
 // readBodyLimited 与 readBody 相同，但限制更小的业务 body（如 OP 登录/踢人）。

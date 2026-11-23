@@ -120,7 +120,7 @@ func ReadPacket(r io.Reader) (*Packet, error) {
 		return nil, ErrBadMagic
 	}
 	bodyLen := int64(binary.BigEndian.Uint32(head[8:12]))
-	if bodyLen > MaxFrameBytes {
+	if bodyLen > MaxFrameBytes() {
 		return nil, ErrFrameTooLarge
 	}
 	// 下限校验：type(1)+seq(4)+headerCount(1) 共 6 字节

@@ -34,16 +34,16 @@ func declaredFrameHead(bodyLen uint32) []byte {
 }
 
 // TestNoPreallocOnDeclaredLength 是本修复的核心回归：
-// 对端仅发 12 字节声明 64MB，服务端分配量必须远小于 64MB。
+// 对端仅发 12 字节声明「当前上限」，服务端分配量必须远小于该值。
 func TestNoPreallocOnDeclaredLength(t *testing.T) {
-	const declared = 64 << 20
+	declared := uint32(MaxFrameBytes())
 
 	var before, after runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&before)
 
-	// bufio 包裹，贴近真实调用路径（server 用 64KB 缓冲）
-	br := bufio.NewReaderSize(&declareOnlyReader{head: declaredFrameHead(declared)}, 64<<10)
+	// bufio 包裹，贴近真实调用路径（server 用 8KB 嗅探缓冲）
+	br := bufio.NewReaderSize(&declareOnlyReader{head: declaredFrameHead(declared)}, 8<<10)
 	_, err := ReadPacket(br)
 	runtime.ReadMemStats(&after)
 
@@ -51,13 +51,13 @@ func TestNoPreallocOnDeclaredLength(t *testing.T) {
 		t.Fatal("expected error (peer declared data but sent none)")
 	}
 	delta := after.TotalAlloc - before.TotalAlloc
-	t.Logf("声明 64MB、实发 12 字节 → 分配 %d 字节（%.2f MB）",
-		delta, float64(delta)/(1<<20))
-	t.Logf("放大比 %.0f : 1（修复前为 5,592,409 : 1）",
+	t.Logf("声明 %dMB、实发 12 字节 → 分配 %d 字节（%.2f MB）",
+		declared>>20, delta, float64(delta)/(1<<20))
+	t.Logf("放大比 %.0f : 1（修复前按 64MB 声明为 5,592,409 : 1）",
 		float64(delta)/12)
 
 	// 修复前是 64MB（67,108,864 字节）；留足余量断言防回退。
-	// 渐进读取首块 4KB + bufio 64KB，预期 < 1MB。
+	// 渐进读取首块 4KB + bufio 8KB，预期 < 1MB。
 	const budget = 1 << 20
 	if delta > budget {
 		t.Fatalf("still preallocating: %d bytes > budget %d", delta, budget)
@@ -73,29 +73,31 @@ func TestPreallocAmpComparison(t *testing.T) {
 	var before, after runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&before)
+	declared := uint32(MaxFrameBytes())
 	for i := 0; i < conns; i++ {
 		r := bufio.NewReaderSize(
-			&declareOnlyReader{head: declaredFrameHead(64 << 20)}, 8<<10)
+			&declareOnlyReader{head: declaredFrameHead(declared)}, 8<<10)
 		ReadPacket(r)
 	}
 	runtime.ReadMemStats(&after)
 
 	delta := after.TotalAlloc - before.TotalAlloc
 	fixed := float64(delta) / float64(conns)
-	t.Logf("修复后：%d 条连接各声明 64MB → 总分配 %.2f MB（每条 %.0f 字节）",
-		conns, float64(delta)/(1<<20), fixed)
-	t.Logf("修复前：同场景为 %.0f MB（每条 64MB），放大 %.0f 倍",
-		float64(conns)*64, float64(conns)*64*1024*1024/float64(delta))
+	t.Logf("修复后：%d 条连接各声明 %dMB → 总分配 %.2f MB（每条 %.0f 字节）",
+		conns, declared>>20, float64(delta)/(1<<20), fixed)
+	t.Logf("修复前：同场景为 %.0f MB（每条 %dMB），放大 %.0f 倍",
+		float64(conns)*float64(declared>>20), declared>>20,
+		float64(conns)*float64(declared)/float64(delta))
 }
 
 // TestGradualGrowthMatchesActualData 验证内存开销与实际收到的字节数
 // **同量级**（而非按声明长度预分配）——这是修复的核心不变式。
 //
-// 断言用「绝对字节数」而非倍数：小 Data 时 bufio 缓冲（64KB）与帧头等
+// 断言用「绝对字节数」而非倍数：小 Data 时 bufio 缓冲（8KB）与帧头等
 // 固定开销占主导，倍数无意义；而绝对量能直接回答关键问题——
 // 「无论对端声明多大的帧，服务端分配量都远小于声明值」。
 func TestGradualGrowthMatchesActualData(t *testing.T) {
-	// 调用方 bufio 缓冲（server 用 64KB）+ 帧头/切片/对齐等固定开销
+	// 调用方 bufio 缓冲（server 用 8KB）+ 帧头/切片/对齐等固定开销
 	const fixedOverhead = 256 << 10
 
 	for _, actual := range []int{0, 100, 4096, 100000, 1 << 20} {
@@ -120,9 +122,9 @@ func TestGradualGrowthMatchesActualData(t *testing.T) {
 		if rerr != nil {
 			status = "截断(预期)"
 		}
-		t.Logf("Data 实际 %7d 字节 → 分配 %9d 字节（%.2f MB）[%s]；按声明 64MB 预分配则是其 %.0f 倍",
+		t.Logf("Data 实际 %7d 字节 → 分配 %9d 字节（%.2f MB）[%s]；按声明上限预分配则是其 %.0f 倍",
 			actual, delta, float64(delta)/(1<<20), status,
-			float64(MaxFrameBytes)/float64(maxU64(delta, 1)))
+			float64(MaxFrameBytes())/float64(maxU64(delta, 1)))
 
 		// 不变式：分配量 = 固定开销 + 与 Data 长度同量级的增量。
 		// 8 倍余量覆盖 bytes.Buffer.ReadFrom 的内部缓冲策略差异：
@@ -135,9 +137,9 @@ func TestGradualGrowthMatchesActualData(t *testing.T) {
 				delta, ceiling, fixedOverhead, actual)
 		}
 		// 且必须显著小于「按声明长度预分配」的量——这是修复的核心
-		if delta > MaxFrameBytes/2 {
+		if delta > uint64(MaxFrameBytes()/2) {
 			t.Fatalf("allocation %d approaches declared preallocation %d — regression",
-				delta, uint64(MaxFrameBytes))
+				delta, uint64(MaxFrameBytes()))
 		}
 	}
 }
@@ -156,7 +158,8 @@ func TestLegitLargeFrameStillWorks(t *testing.T) {
 		p.Seq = 7
 		p.AddHeader(HeaderClientID, "big-client")
 		p.AddHeader(PayloadContentType, "application/json;charset=utf8;")
-		p.Data = bytes.Repeat([]byte("中"), size) // 中文 3 字节/字
+		// size 是字节数；中文 3 字节/字，避免把 8MB 误写成 24MB 触发上限。
+		p.Data = bytes.Repeat([]byte("中"), size/3)
 
 		full, err := p.Encode()
 		if err != nil {
@@ -204,8 +207,8 @@ func TestInvalidDeclaredLengths(t *testing.T) {
 		name string
 		body uint32
 	}{
-		{"超上限", MaxFrameBytes + 1},
-		{"上限+1MB", MaxFrameBytes + 1<<20},
+		{"超上限", uint32(MaxFrameBytes() + 1)},
+		{"上限+1MB", uint32(MaxFrameBytes() + 1<<20)},
 		{"超uint32", 0},
 	}
 	for _, c := range cases {

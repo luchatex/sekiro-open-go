@@ -63,6 +63,9 @@ func New(cfg *config.Config) (*Server, error) {
 	// 错误事件是否附带参数摘要（-op-err-params，默认关）。埋点在 group.Record，
 	// 通过 metrics 包级开关传递，避免为纯观测开关改动调用链签名。
 	metrics.SetCaptureParams(cfg.OpErrParams)
+	// 单帧上限统一由配置驱动：native 帧解析、HTTP body、WS 读限制都走
+	// protocol.MaxFrameBytes()，避免三处各写各的导致大文本忽大忽小被拒。
+	protocol.SetMaxFrameBytes(cfg.MaxFrameBytes())
 	s := &Server{
 		cfg:          cfg,
 		mgr:          group.NewManager(log),
@@ -256,7 +259,12 @@ func (s *Server) Close() {
 func (s *Server) handleConn(conn net.Conn) {
 	// 连接所有权：binary → native.ServeChannel 内部关闭；
 	// HTTP → 移交 http.Server；其余路径在本函数内关闭。
-	br := bufio.NewReaderSize(conn, 64<<10)
+	//
+	// 嗅探只需 Peek(8) 或至多 Peek(9)，8KB 足够；原先 64KB 的缓冲会随连接
+	// 一直持有（HTTP keep-alive 尤其明显），1000 条空闲连接多占约 56MB。
+	// native 读循环拿到的是同一 Reader，8KB 只增加少量 read 次数，不影响
+	// 组包语义（ReadPacket 用 ReadFull/ReadFrom，不依赖缓冲大小）。
+	br := bufio.NewReaderSize(conn, 8<<10)
 
 	// 探测阶段限时（slowloris 防护）；分流后立即清零：
 	// binary 由 readLoop 按读空闲自管，HTTP 交给 http.Server 的

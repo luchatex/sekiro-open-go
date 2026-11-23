@@ -112,12 +112,17 @@ logging:
     max-file: "3"
 ```
 
+单帧 / HTTP body / WS 帧上限默认 16MiB（`SEKIRO_MAX_FRAME_MB`），三处同源；
+业务大文本确实超过 16MB 时在 `.env` 调大即可（例如 32）。这同时压低了单帧
+可占用的内存峰值，不是 GC 参数的替代品。
+
 可在根目录 `.env` 覆盖：
 
 ```dotenv
 SEKIRO_MEM_LIMIT=4g
 GOMEMLIMIT=3GiB
 GOGC=100
+SEKIRO_MAX_FRAME_MB=16
 ```
 
 参数含义和取舍：
@@ -136,7 +141,7 @@ GOGC=100
 docker run -d --name sekiro \
   --memory=4g --memory-swap=4g \
   --log-driver=json-file --log-opt max-size=50m --log-opt max-file=3 \
-  -e GOMEMLIMIT=3GiB -e GOGC=100 \
+  -e GOMEMLIMIT=3GiB -e GOGC=100 -e SEKIRO_MAX_FRAME_MB=16 \
   -p 5612:5612 --restart unless-stopped \
   ghcr.io/luchatex/sekiro-open-go:1.0.4
 ```

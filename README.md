@@ -103,10 +103,15 @@ curl "http://127.0.0.1:5612/business/groupList"
 | `-op-password` | `SEKIRO_OP_PASSWORD` | 空 | `/op` 监控路径访问密码；连续输错 3 次锁定来源 IP 2 分钟。空 = 无鉴权 |
 | `-tls-cert/-tls-key` | `SEKIRO_TLS_CERT/KEY` | 空 | 同时提供则启用 wss 监听 |
 | `-tls-port` | `SEKIRO_TLS_PORT` | `5613` | wss 监听端口 |
+| `-max-frame-mb` | `SEKIRO_MAX_FRAME_MB` | `16` | 单帧 / HTTP body / WS 帧上限（MiB）；大文本场景按需调大，最大 1024 |
 
 Docker 部署还建议设置 Go runtime 环境变量：`GOMEMLIMIT=3GiB`（容器 4GB 限制下的
 GC 软目标）和 `GOGC=100`（默认值）。`GOMEMLIMIT` 不是硬限制，也不能修复泄漏；
 若进程仍持续上涨，应由 4GB 容器限制兜底并排查 live heap。
+
+`-max-frame-mb` 默认 16：业务大文本通常 <10MB，留约 60% 余量；原实现 native
+帧 64MB、HTTP/WS 32MB，收紧后单帧可占用的内存峰值随之下降。若确实有超过 16MB
+的文本，设 `SEKIRO_MAX_FRAME_MB=32`（或更大）即可，无需改代码；三处限制始终同源。
 
 优雅关停：SIGTERM/SIGINT 等待在途调用回包（上限 20s 后退）。
 

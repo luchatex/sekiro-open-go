@@ -117,5 +117,25 @@ const (
 	DefaultInvokeTimeout = 15 * time.Second
 )
 
-// MaxFrameBytes 单帧上限 64MB（防护内存滥用；常规业务 <32MB）。
-const MaxFrameBytes = 64 << 20
+// DefaultMaxFrameBytes 单帧/请求体默认上限 16MB。
+//
+// 业务侧大文本通常 <10MB，取 16MB 留约 60% 余量；原值 64MB（HTTP/WS 另设
+// 32MB）是为未知峰值留的安全垫，实测只会抬高单帧可占用的内存峰值，收益有限。
+// 若确实需要更大文本，用 SEKIRO_MAX_FRAME_MB 或 -max-frame-mb 调整，无需改代码。
+// 用原子变量而非 const，使测试与启动配置都能注入；调用方一律走 MaxFrameBytes()。
+const DefaultMaxFrameBytes = 16 << 20
+
+var maxFrameBytes atomic.Int64
+
+func init() { maxFrameBytes.Store(DefaultMaxFrameBytes) }
+
+// SetMaxFrameBytes 设置单帧上限（字节）；非正值回退默认值。
+func SetMaxFrameBytes(n int64) {
+	if n <= 0 {
+		n = DefaultMaxFrameBytes
+	}
+	maxFrameBytes.Store(n)
+}
+
+// MaxFrameBytes 当前单帧上限（字节）。
+func MaxFrameBytes() int64 { return maxFrameBytes.Load() }

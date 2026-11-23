@@ -46,3 +46,19 @@ func TestSlogLevelInvalidFallsBackToInfo(t *testing.T) {
 		t.Fatalf("invalid: want info/!ok, got %v/%v", lv, ok)
 	}
 }
+
+func TestMaxFrameBytes(t *testing.T) {
+	cases := map[int]int64{
+		0:    16 << 20, // 零值 Config（单测直接构造）走默认
+		-1:   16 << 20, // 非法值回退默认
+		10:   10 << 20,
+		64:   64 << 20,
+		2048: 16 << 20, // 超过 1GiB 回退默认
+	}
+	for mb, want := range cases {
+		c := &Config{MaxFrameMB: mb}
+		if got := c.MaxFrameBytes(); got != want {
+			t.Errorf("MaxFrameMB=%d: got %d, want %d", mb, got, want)
+		}
+	}
+}

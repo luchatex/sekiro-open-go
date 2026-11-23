@@ -208,7 +208,7 @@ func wsRegister(w http.ResponseWriter, r *http.Request, mgr *group.Manager, log 
 		metrics.Default().ConnRegisterFail("accept-error")
 		return
 	}
-	conn.SetReadLimit(1 << 25) // 32MB，对齐聚合器上限
+	conn.SetReadLimit(protocol.MaxFrameBytes())
 
 	g := mgr.GetOrCreate(gName)
 	// 压缩协商可观测：客户端声明 permessage-deflate 即协商成功（Accept

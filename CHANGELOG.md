@@ -9,6 +9,18 @@
 
 ## [Unreleased]
 
+### 优化
+
+- **每连接嗅探缓冲 64KB → 8KB**：嗅探只需 8~9 字节，HTTP keep-alive 连接却会
+  一直持有该缓冲；1000 条空闲连接因此少占约 56MB。
+- **池化 gzip 状态对象**：`gzip.Writer` / `gzip.Reader` 与 64KB 解压 chunk 进池，
+  避免每次请求新建 deflate 状态；结果缓冲不进池，防止大响应后缓冲常驻。
+  snappy 的 Encode/Decode 没有可复用内部状态，强行池化 dst 需要多一次拷贝且
+  净分配不变，因此不改。
+- **单帧上限 64MB → 默认 16MB，且可配置**：`SEKIRO_MAX_FRAME_MB` / `-max-frame-mb`
+  统一驱动 native 帧、HTTP body 与 WS 读限制；业务大文本通常 <10MB，16MB 留约
+  60% 余量，超过时调大配置即可。单帧可占用的内存峰值随之下降。
+
 ### 修复
 
 - **监控页「最近事件」表格不再撑出卡片**：固定列宽并对长 `message` / `params`

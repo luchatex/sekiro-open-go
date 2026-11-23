@@ -36,6 +36,7 @@ COPY --from=builder /out/sekiro /usr/local/bin/sekiro
 # 配置对齐 internal/config：SEKIRO_PORT（默认 5612，同原版 sekiro.port）、
 # SEKIRO_LOCAL_DEBUG（调试模式）；亦可用命令行 -port/-debug 覆盖
 ENV SEKIRO_PORT=5612 \
+    SEKIRO_MAX_FRAME_MB=16 \
     TZ=Asia/Shanghai
 
 EXPOSE 5612
