@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 360" width="100%" role="img" aria-labelledby="flowTitle flowDesc">
+  <title id="flowTitle">sekiro-go 请求链路</title>
+  <desc id="flowDesc">Provider 注册并回包，sekiro-go 负责路由，Invoker 发起调用，全过程写入 /op 监控。</desc>
+  <style>
+    :root {
+      --surface: #ffffff;
+      --border: #e5e9f0;
+      --text: #1c2333;
+      --muted: #6b7486;
+      --arr: #6b7486;
+      --blue: #e6f1fb;
+      --blue-stroke: #185fa5;
+      --blue-text: #0c447c;
+      --teal: #e1f5ee;
+      --teal-stroke: #0f6e56;
+      --teal-text: #085041;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --surface: #1f2635;
+        --border: #3a465c;
+        --text: #e6ebf5;
+        --muted: #9aa6ba;
+        --arr: #9aa6ba;
+        --blue: #163a63;
+        --blue-stroke: #85b7eb;
+        --blue-text: #d7e9ff;
+        --teal: #123d33;
+        --teal-stroke: #5dcaa5;
+        --teal-text: #c9f2e2;
+      }
+    }
+    text { font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif; }
+    .th { font-size: 14px; font-weight: 500; fill: var(--text); }
+    .ts { font-size: 12px; font-weight: 400; fill: var(--muted); }
+    .blue { fill: var(--blue); stroke: var(--blue-stroke); stroke-width: 0.5; }
+    .teal { fill: var(--teal); stroke: var(--teal-stroke); stroke-width: 0.5; }
+    .blue-t { fill: var(--blue-text); }
+    .teal-t { fill: var(--teal-text); }
+    .box { fill: var(--surface); stroke: var(--border); stroke-width: 0.5; }
+    .leader { stroke: var(--border); stroke-width: 0.5; stroke-dasharray: 4 4; }
+    .arr { stroke: var(--arr); stroke-width: 1.5; fill: none; }
+  </style>
+  <defs>
+    <marker id="flowArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="var(--arr)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <rect class="blue" x="50" y="40" width="160" height="44" rx="8"/>
+  <text class="th blue-t" x="130" y="62" text-anchor="middle" dominant-baseline="central">Provider</text>
+  <text class="ts" x="130" y="98" text-anchor="middle">JS / Java / Python</text>
+  <rect class="teal" x="260" y="40" width="160" height="44" rx="8"/>
+  <text class="th teal-t" x="340" y="62" text-anchor="middle" dominant-baseline="central">sekiro-go</text>
+  <text class="ts" x="340" y="98" text-anchor="middle">单端口 · group ring</text>
+  <rect class="blue" x="470" y="40" width="160" height="44" rx="8"/>
+  <text class="th blue-t" x="550" y="62" text-anchor="middle" dominant-baseline="central">Invoker</text>
+  <text class="ts" x="550" y="98" text-anchor="middle">业务调用方</text>
+  <line class="leader" x1="130" y1="110" x2="130" y2="295"/>
+  <line class="leader" x1="340" y1="110" x2="340" y2="295"/>
+  <line class="leader" x1="550" y1="110" x2="550" y2="295"/>
+  <text class="ts" x="235" y="132" text-anchor="middle">① 注册 / hb=1</text>
+  <line class="arr" x1="140" y1="140" x2="330" y2="140" marker-end="url(#flowArrow)"/>
+  <text class="ts" x="235" y="167" text-anchor="middle">② hello + 心跳回显</text>
+  <line class="arr" x1="330" y1="175" x2="140" y2="175" marker-end="url(#flowArrow)"/>
+  <text class="ts" x="445" y="202" text-anchor="middle">③ invoke(group, action)</text>
+  <line class="arr" x1="540" y1="210" x2="350" y2="210" marker-end="url(#flowArrow)"/>
+  <text class="ts" x="235" y="237" text-anchor="middle">④ 派发 + __sekiro_seq__</text>
+  <line class="arr" x1="330" y1="245" x2="140" y2="245" marker-end="url(#flowArrow)"/>
+  <text class="ts" x="235" y="272" text-anchor="middle">⑤ handler 结果（可压缩）</text>
+  <line class="arr" x1="140" y1="280" x2="330" y2="280" marker-end="url(#flowArrow)"/>
+  <text class="ts" x="445" y="307" text-anchor="middle">⑥ status / data</text>
+  <line class="arr" x1="350" y1="315" x2="540" y2="315" marker-end="url(#flowArrow)"/>
+  <rect class="box" x="260" y="332" width="160" height="20" rx="6"/>
+  <text class="ts" x="340" y="342" text-anchor="middle" dominant-baseline="central">调用与连接写入 /op</text>
+</svg>

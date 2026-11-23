@@ -9,6 +9,12 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **README 增加请求链路示意图**：`assets/sekiro-flow.svg` 内嵌展示 Provider 注册、
+  心跳、Invoker 调用、group ring 派发、handler 回包与监控埋点六步；另提供
+  `assets/sekiro-flow.html` 单文件交互版，可逐步高亮并查看解释。两版均无外部依赖。
+
 ### 优化
 
 - **每连接嗅探缓冲 64KB → 8KB**：嗅探只需 8~9 字节，HTTP keep-alive 连接却会

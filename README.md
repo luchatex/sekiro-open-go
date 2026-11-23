@@ -22,6 +22,25 @@ SEKIRO 是一个多语言、分布式、网络拓扑无关的**服务发布平�
 > 致谢 [yint-tech](https://github.com/yint-tech) 的原版实现——本项目在协议设计、
 > 本项目完全基于原版进行go语言复现，并根据大文本优化。
 
+## 请求链路一览
+
+Provider 主动连入中心服务并注册能力，Invoker 只与中心服务通信——因此可以在
+无公网 IP、NAT 之后的环境中发布能力。一次完整调用如下：
+
+![sekiro-go 请求链路](assets/sekiro-flow.svg)
+
+| 步骤 | 方向 | 发生了什么 |
+|---|---|---|
+| ① | Provider → sekiro-go | 注册 `:group` / `:clientId`，新客户端带 `hb=1` 声明心跳能力 |
+| ② | sekiro-go → Provider | 回 hello 与心跳间隔，之后双向心跳用于发现半开连接 |
+| ③ | Invoker → sekiro-go | `GET /business/invoke?group=&action=&bind_client=` |
+| ④ | sekiro-go → Provider | 按 group ring / `bind_client` 定位设备，带 `__sekiro_seq__` 派发 |
+| ⑤ | Provider → sekiro-go | handler 结果回包，服务端按头部解压/聚合 |
+| ⑥ | sekiro-go → Invoker | 返回 `status/data`，同时把调用与连接写入 `/op` 监控 |
+
+想逐步查看每一步的细节，打开[交互式示意图](assets/sekiro-flow.html)。它是单文件、
+无外部依赖，建议下载到本地或放到内网静态服务后打开（GitHub 直接点击可能显示源码）。
+
 ## 为什么重写
 
 
