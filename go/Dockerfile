@@ -7,6 +7,7 @@
 FROM golang:1.27-alpine AS builder
 
 ARG GOPROXY=https://goproxy.cn,direct
+ARG VERSION=dev
 ENV GOPROXY=${GOPROXY} \
     CGO_ENABLED=0 \
     GOOS=linux
@@ -21,7 +22,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go build -trimpath -ldflags="-s -w" -o /out/sekiro ./cmd/sekiro
+    go build -trimpath -ldflags="-s -w -X sekiro-go/internal/version.Version=${VERSION}" -o /out/sekiro ./cmd/sekiro
 
 ########## 阶段 2：运行 ##########
 FROM alpine:3.20

@@ -36,6 +36,8 @@ make race
 http://127.0.0.1:5612/op
 ```
 
+- **构建版本**：页头 `version`，构建时由 `-X sekiro-go/internal/version.Version` 注入
+  （Release 取 tag 号，本地构建默认 `dev`），便于区分线上产物与开发构建
 - **KPI 总览**：group 数、在线 client 数、QPS（1 分钟均值）、累计调用、成功率、流量 In/Out
 - **趋势图**：按小时（24h）/ 按天（7d）切换，SVG 堆叠柱（成功/失败/系统错误三色）
 - **group 明细表**：六指标 + 24h sparkline，点击行展开 action 子表

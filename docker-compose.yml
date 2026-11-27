@@ -18,6 +18,8 @@ services:
       args:
         # 国内网络默认走 goproxy.cn；海外可改 https://proxy.golang.org,direct
         GOPROXY: https://goproxy.cn,direct
+        # 监控页展示的构建版本；本地构建默认 dev，可用 SEKIRO_VERSION 覆盖
+        VERSION: "${SEKIRO_VERSION:-dev}"
     image: sekiro-go:latest
     container_name: sekiro-go
     restart: unless-stopped

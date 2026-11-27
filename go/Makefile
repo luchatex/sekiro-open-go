@@ -3,11 +3,13 @@
 GO ?= go
 BINARY := sekiro
 PKG     := ./cmd/sekiro
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -X sekiro-go/internal/version.Version=$(VERSION)
 
 .PHONY: build test race check fmt-check vet fmt clean golden
 
 build:
-	$(GO) build -o bin/$(BINARY) $(PKG)
+	$(GO) build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) $(PKG)
 
 test:
 	$(GO) test ./... -count=1

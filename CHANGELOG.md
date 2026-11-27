@@ -15,6 +15,8 @@
 
 ### 新增
 
+- **监控页显示构建版本**：`/op` 页头展示 `version`，由构建时 `-X` 注入
+  （Release 取 tag 号，本地构建默认 `dev`）；镜像与二进制来源一眼可辨。
 - **系统错误事件带来源 IP**：`/op/api/errors` 的 `recent` 事件新增 `sourceIp`，
   始终采集并去掉端口；反代后按可信规则取 `X-Real-IP` / `X-Forwarded-For`。
   定位「谁在反复发这条请求」不再依赖 nginx access log 是否记录 invoke 参数。

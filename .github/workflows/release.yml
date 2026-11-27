@@ -36,7 +36,9 @@ jobs:
 
       - name: Build all platforms
         run: |
-          LDFLAGS="-s -w"
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          LDFLAGS="-s -w -X sekiro-go/internal/version.Version=${VERSION}"
           build() { # build <os> <arch> <out>
             GOOS="$1" GOARCH="$2" go build -trimpath -ldflags "$LDFLAGS" \
               -o "../dist/$3" ./cmd/sekiro
@@ -108,6 +110,7 @@ jobs:
           push: true
           build-args: |
             GOPROXY=https://proxy.golang.org,direct
+            VERSION=${{ env.VERSION }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

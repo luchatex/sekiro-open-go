@@ -17,6 +17,7 @@ import (
 
 	"sekiro-go/internal/group"
 	"sekiro-go/internal/metrics"
+	"sekiro-go/internal/version"
 )
 
 //go:embed web/op.html
@@ -53,6 +54,9 @@ func handleOpPage(w http.ResponseWriter) {
 		httpResponseText(w, http.StatusInternalServerError, "op page missing")
 		return
 	}
+	// 版本号在构建时由 -X 注入；监控页保持单文件，避免额外 API 往返。
+	page := strings.ReplaceAll(string(data), "__SEKIRO_VERSION__", version.String())
+	data = []byte(page)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
