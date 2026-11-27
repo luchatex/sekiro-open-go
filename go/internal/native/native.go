@@ -65,6 +65,15 @@ func ServeChannel(conn net.Conn, br *bufio.Reader, mgr *group.Manager, comp *com
 	ch.readLoop()
 }
 
+// peerHost 去掉 RemoteAddr 的端口，保留 IPv4 / IPv6 字面量。
+func peerHost(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
+}
+
 func (c *Channel) close() {
 	c.closeOnce.Do(func() {
 		c.dead.Store(true)
@@ -265,6 +274,7 @@ func (c *Channel) handleInvokerInvoke(p *protocol.Packet) {
 	sink := &invokerSink{ch: c, seq: p.Seq, closed: make(chan struct{})}
 	timeout := time.Duration(params.GetInt(protocol.ParamInvokeTimeout)) * time.Millisecond
 	rec := group.NewRecord(params, sink, p.Seq, timeout) // <500ms 由 NewRecord 提升为默认值
+	rec.SourceIP = peerHost(c.conn.RemoteAddr().String())
 	if !c.trackInvoke(p.Seq, rec) {
 		c.log.Warn("duplicate invoker seq", "seq", p.Seq)
 		c.closeConn()

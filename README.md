@@ -147,8 +147,9 @@ GC 软目标）和 `GOGC=100`（默认值）。`GOMEMLIMIT` 不是硬限制，�
 - **趋势图**：24h（小时精度）/ 7d（天精度）SVG 堆叠柱（成功/失败/系统错误三色）
 - **客户端节点面板**：在线状态、设备名、IP、通道类型、WS 压缩协商状态（`deflate`/`off`）、
   连接/最后活跃时间、一键踢下线（带审计日志）
-- **系统错误分析**：原因分布（timeout / dispatch-failed / caller-abort）+ 最近 100 条事件明细
-- **数据 API**：`/op/api/stats`、`/op/api/clients`、`/op/api/errors`
+- **系统错误分析**：原因分布（timeout / dispatch-failed / caller-abort）+ 最近 100 条事件明细，
+  事件带**调用方来源 IP**（去端口，反代后取可信转发头）；参数摘要仍由 `-op-err-params` 默认关闭
+- **数据 API**：`/op/api/stats`、`/op/api/clients`、`/op/api/errors`（错误事件的 `sourceIp` 始终有值）
 - **密码保护**（v1.0.0+）：`-op-password` / `SEKIRO_OP_PASSWORD` 启用登录访问
   （12h 会话 Cookie；连续输错 3 次锁定来源 IP 2 分钟），见上方配置参数表；
   curl 脚本先 `POST /op/api/login` 拿 Cookie 再携带访问

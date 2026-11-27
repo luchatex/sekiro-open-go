@@ -149,3 +149,21 @@ func TestCaptureParamsFlag(t *testing.T) {
 		t.Fatal("SetCaptureParams(true) 未生效")
 	}
 }
+
+// 来源 IP 始终随错误事件落账，不受参数摘要开关影响。
+func TestRecordSysErrWithSource(t *testing.T) {
+	t.Cleanup(func() { SetCaptureParams(false) })
+	SetCaptureParams(false)
+	r := New()
+	r.RecordSysErrWithSource("g1", "a1", ErrDispatch, "no device found", "c1", "http", "203.0.113.9", "")
+	e := r.Errors()
+	if len(e.Recent) != 1 {
+		t.Fatalf("recent 长度 = %d, want 1", len(e.Recent))
+	}
+	if got := e.Recent[0].SourceIP; got != "203.0.113.9" {
+		t.Fatalf("sourceIp = %q, want 203.0.113.9", got)
+	}
+	if e.Recent[0].Params != "" {
+		t.Fatalf("参数摘要默认应为空，实际 %q", e.Recent[0].Params)
+	}
+}

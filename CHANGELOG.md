@@ -7,6 +7,15 @@
 产物与镜像随 `v*` 标签自动构建发布，各版本下载见
 [Releases](https://github.com/luchatex/sekiro-open-go/releases)。
 
+## [Unreleased]
+
+### 新增
+
+- **系统错误事件带来源 IP**：`/op/api/errors` 的 `recent` 事件新增 `sourceIp`，
+  始终采集并去掉端口；反代后按可信规则取 `X-Real-IP` / `X-Forwarded-For`。
+  定位「谁在反复发这条请求」不再依赖 nginx access log 是否记录 invoke 参数。
+  参数摘要 `-op-err-params`（默认关）仍然独立，避免业务数据进入监控。
+
 ## [v1.1.1] - 2026-11-23
 
 发布镜像：`ghcr.io/luchatex/sekiro-open-go:1.1.1`（同时生成 `1.1`）。

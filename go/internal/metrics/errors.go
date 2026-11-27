@@ -51,6 +51,10 @@ type SysErrEvent struct {
 	Params   string `json:"params,omitempty"`
 	ClientID string `json:"clientId,omitempty"`
 	Channel  string `json:"channel,omitempty"` // http / invoker（消费方通道）
+	// SourceIP 调用方来源 IP（去掉端口；反代后取可信转发头）。始终采集，
+	// 不受 -op-err-params 影响——定位「谁在反复发这条请求」只需要 IP，
+	// 不涉及业务参数，默认开启不会把 URL / 文书 ID 写进监控数据。
+	SourceIP string `json:"sourceIp,omitempty"`
 }
 
 // reasonStat 单原因聚合（全量计数 + 最近发生时刻）。
@@ -116,10 +120,15 @@ type ErrorsJSON struct {
 	Recent        []SysErrEvent `json:"recent"`        // 最新在前，最多 errRingCap 条
 }
 
-// RecordSysErr 记录一条系统错误：完成 SysErr 计数（复用 Finish 计数路径）、
-// 原因聚合（entity 级 + 全局 + group/action 聚合）与最近事件环形写入。
+// RecordSysErr 记录一条系统错误（兼容旧调用方，来源 IP 为空）。
 // params 为请求参数摘要（未开启 -op-err-params 时为空）。nil 接收者安全。
 func (r *Recorder) RecordSysErr(group, action, reason, message, clientID, channel, params string) {
+	r.RecordSysErrWithSource(group, action, reason, message, clientID, channel, "", params)
+}
+
+// RecordSysErrWithSource 同 RecordSysErr，并附带调用方来源 IP。
+// 来源 IP 始终记录；params 摘要仍受 -op-err-params 开关控制。
+func (r *Recorder) RecordSysErrWithSource(group, action, reason, message, clientID, channel, sourceIP, params string) {
 	if r == nil {
 		return
 	}
@@ -168,7 +177,7 @@ func (r *Recorder) RecordSysErr(group, action, reason, message, clientID, channe
 	r.ring[r.ringN%errRingCap] = SysErrEvent{
 		Time: now.Unix(), Group: group, Action: action,
 		Reason: reason, Message: message, Params: params,
-		ClientID: clientID, Channel: channel,
+		ClientID: clientID, Channel: channel, SourceIP: sourceIP,
 	}
 	r.ringN++
 }

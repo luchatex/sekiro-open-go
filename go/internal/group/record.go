@@ -39,6 +39,9 @@ type Record struct {
 	// Meter 可选指标记录器（nil 安全，测试默认不设）：
 	// 终结时按 success/fail/sysErr 分类计数，并累加响应流量。
 	Meter *metrics.Recorder
+	// SourceIP 调用方来源 IP（由 HTTP / native 入口写入，去端口取可信转发头）。
+	// 只用于系统错误事件，帮助定位「谁在反复发这条请求」。
+	SourceIP string
 
 	mu   sync.Mutex
 	done bool
@@ -95,7 +98,7 @@ func (r *Record) finishSysErr(reason, message string) {
 	if metrics.CaptureParams() {
 		params = paramDigest(r.Params)
 	}
-	r.Meter.RecordSysErr(g, a, reason, message, r.clientID(), channel, params)
+	r.Meter.RecordSysErrWithSource(g, a, reason, message, r.clientID(), channel, r.SourceIP, params)
 }
 
 // digestSkipKeys 框架键：属协议层（分组/动作/超时/序号），对定位业务请求

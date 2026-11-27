@@ -174,6 +174,9 @@ func handleInvoke(w http.ResponseWriter, r *http.Request, mgr *group.Manager, lo
 	timeout := timeFromMillis(params.GetInt(protocol.ParamInvokeTimeout))
 	rec := group.NewRecord(params, sink, -1, timeout)
 	rec.Meter = mtr
+	// 来源 IP 始终进入系统错误事件：定位「谁在反复发这条请求」不需要业务参数，
+	// 因此不受 -op-err-params（参数摘要，默认关）影响。
+	rec.SourceIP = opClientIP(r)
 	mtr.Invoke(
 		params.GetString(protocol.ParamGroup),
 		params.GetString(protocol.ParamAction),
