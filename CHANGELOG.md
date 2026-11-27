@@ -7,7 +7,11 @@
 产物与镜像随 `v*` 标签自动构建发布，各版本下载见
 [Releases](https://github.com/luchatex/sekiro-open-go/releases)。
 
-## [Unreleased]
+## [v1.1.4] - 2026-11-27
+
+发布镜像：`ghcr.io/luchatex/sekiro-open-go:1.1.4`（同时生成 `1.1`）。
+以「调用方防堆积」为主的补丁版本：长任务忙信号、调用方参考封装，
+并把 Invoker 的默认路径与请求方式对齐既有生产调用方。
 
 ### 新增
 
@@ -17,6 +21,14 @@
 - **调用方参考封装 `client/sekiroInvoker.js`**：内置正确的 `invoke_timeout`、
   调用方 HTTP 超时、每 clientId 并发 1、最多 2 次退避重试、幂等缓存与熔断；
   附 `client/test-sekiroInvoker.js` 本地自测。
+
+### 调整
+
+- **Invoker 默认走生产路径 `/business/invoke`**：兼容既有调用方；沿用
+  `/business-demo/invoke` 的脚本传 `demo:true` 或 `path` 即可。
+- **支持 GET / POST**：默认 GET，大参数可切 `method:'POST'`（form body）。
+- **池化调用不串行**：无 `bindClient` 时不再人为压成单并发；需要时显式
+  `serialize:true`。
 
 ## [v1.1.3] - 2026-11-27
 
@@ -259,6 +271,7 @@ gzip 状态对象池化、单帧上限收紧到默认 16MB；监控页最近事�
 
 单静态二进制、无 JVM 依赖。
 
+[v1.1.4]: https://github.com/luchatex/sekiro-open-go/compare/v1.1.3...v1.1.4
 [v1.1.3]: https://github.com/luchatex/sekiro-open-go/compare/v1.1.2...v1.1.3
 [v1.1.2]: https://github.com/luchatex/sekiro-open-go/compare/v1.1.1...v1.1.2
 [v1.1.1]: https://github.com/luchatex/sekiro-open-go/compare/v1.1.0...v1.1.1

@@ -230,6 +230,8 @@ const invoker = new SekiroInvoker('https://sekiro.example.com', {
   timeoutMs: 120000,        // 调用方 HTTP 超时，须 > 任务总时长
   serverTimeoutMs: 100000,  // 写进 invoke_timeout，服务端按此等待
   breakerFailures: 3        // 同 clientId 5 分钟内 3 次失败 → 熔断 5 分钟
+  // path: '/business/invoke'（默认；本地 demo 可用 demo:true）
+  // method: 'GET'（默认）或 'POST'（form body）
 });
 
 const res = await invoker.invoke('ws_list', 'searchCprq',
@@ -237,10 +239,15 @@ const res = await invoker.invoke('ws_list', 'searchCprq',
   { bindClient: '15696699241' });
 ```
 
-- 同一 `bindClient` 的请求自动串行；不同 clientId 互不影响。
+- 默认走生产路径 `/business/invoke`；沿用 `/business-demo/invoke` 的旧脚本传
+  `demo:true` 或 `path:'/business-demo/invoke'` 即可。
+- 默认 `GET`，大参数可传 `method:'POST'`（`application/x-www-form-urlencoded`）。
+- 同一 `bindClient` 的请求自动串行；不同 clientId 互不影响。没有 `bindClient`
+  的池化调用默认不串行，避免人为压低吞吐；需要时传 `serialize:true`。
 - 重试只针对 `busy` / `timeout` / `upstream lose connection` 和网络错误；
   业务失败（如 `no device found`）不重试。
-- 相同参数默认按幂等键缓存 5 分钟；可用 `idempotencyKey` 显式指定。
+- 相同参数默认按幂等键缓存 5 分钟；写操作请传 `idempotencyTTL:0` 关闭缓存，
+  或显式指定 `idempotencyKey`。
 - 熔断期间直接抛 `circuit open`，不再向慢设备发请求。
 
 本地自测：`node client/test-sekiroInvoker.js`（无需服务端，注入 fake fetch）。

@@ -27,7 +27,24 @@ async function testParamsAndIdempotency() {
   assert.strictEqual(q.get('invoke_timeout'), '100000');
   assert.strictEqual(q.get('pageNum'), '2');
   assert.ok(q.get('__invoke_trace_id'));
-  console.log('ok: 参数与幂等');
+  assert.strictEqual(new URL(calls[0].url).pathname, '/business/invoke');
+  console.log('ok: 参数、默认生产路径与幂等');
+}
+
+async function testPostMethod() {
+  const calls = [];
+  const inv = new SekiroInvoker('http://x', {
+    fetch: async (url, init) => {
+      calls.push({ url, init });
+      return response({ status: 0, data: 'ok' });
+    },
+    method: 'POST', timeoutMs: 500
+  });
+  await inv.invoke('g', 'a', { x: 1 }, { bindClient: 'c-post' });
+  assert.strictEqual(calls[0].init.method, 'POST');
+  assert.ok(calls[0].init.body.includes('group=g'));
+  assert.ok(calls[0].init.body.includes('invoke_timeout=100000'));
+  console.log('ok: POST form body');
 }
 
 async function testRetryOnBusy() {
@@ -83,6 +100,7 @@ async function testCircuitBreaker() {
 
 (async () => {
   await testParamsAndIdempotency();
+  await testPostMethod();
   await testRetryOnBusy();
   await testPerClientConcurrency();
   await testCircuitBreaker();

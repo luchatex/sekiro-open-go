@@ -145,7 +145,7 @@ docker run -d --name sekiro \
   -e GOMEMLIMIT=3GiB -e GOGC=100 -e SEKIRO_MAX_FRAME_MB=16 \
   -e SEKIRO_OP_ERR_PARAMS=false \
   -p 5612:5612 --restart unless-stopped \
-  ghcr.io/luchatex/sekiro-open-go:1.1.2
+  ghcr.io/luchatex/sekiro-open-go:1.1.4
 ```
 
 注意事项：

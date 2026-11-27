@@ -48,6 +48,15 @@
         this.breakerFailures = o.breakerFailures || 3;
         this.breakerCooldownMs = o.breakerCooldownMs || 300000;
         this.idempotencyTTL = o.idempotencyTTL || 300000;
+        // 默认生产路径；本地联调可用 demo:true 或 path:'/business-demo/invoke'。
+        this.path = o.path || (o.demo ? '/business-demo/invoke' : '/business/invoke');
+        if (this.path.charAt(0) !== '/') this.path = '/' + this.path;
+        this.method = (o.method || 'GET').toUpperCase();
+        if (this.method !== 'GET' && this.method !== 'POST') {
+            throw new Error('SekiroInvoker: method 只支持 GET 或 POST');
+        }
+        // 仅当显式指定 bindClient 时串行；无 bindClient 的池化调用不互相排队。
+        this.serialize = o.serialize === undefined ? true : !!o.serialize;
         this.fetchImpl = o.fetch || (typeof fetch !== 'undefined' ? fetch : null);
         if (typeof this.fetchImpl !== 'function') {
             throw new Error('SekiroInvoker: 当前环境没有 fetch，请通过 options.fetch 注入');
@@ -71,17 +80,24 @@
         var breaker = this._checkBreaker(slot);
         if (breaker) return Promise.reject(breaker);
 
-        // 每 clientId 单飞：后续调用排队等待，不在同一设备上叠加长任务。
-        var prev = this.chains.get(slot) || Promise.resolve();
-        var run = prev.catch(function () {}).then(function () {
+        var task = function () {
             return self._invokeWithRetry(group, action, params || {}, {
                 bindClient: bindClient,
                 idempotencyKey: idempotencyKey,
                 timeoutMs: o.timeoutMs || self.timeoutMs,
                 signal: o.signal
             });
-        });
-        this.chains.set(slot, run.catch(function () {}));
+        };
+        var run;
+        if (this.serialize && bindClient) {
+            // 每 clientId 单飞：后续调用排队等待，不在同一设备上叠加长任务。
+            var prev = this.chains.get(slot) || Promise.resolve();
+            run = prev.catch(function () {}).then(task);
+            this.chains.set(slot, run.catch(function () {}));
+        } else {
+            // 池化调用没有明确设备归属，串行会人为压低吞吐，保持并发。
+            run = task();
+        }
         return run.then(function (res) {
             self._cacheSet(idempotencyKey, res);
             self._recordSuccess(slot);
@@ -108,19 +124,27 @@
     };
 
     SekiroInvoker.prototype._invokeOnce = function (group, action, params, o) {
-        var url = this.baseURL + '/business-demo/invoke?' + this._query(group, action, params, o);
+        var qs = this._query(group, action, params, o);
+        var url = this.baseURL + this.path;
+        var init = {
+            method: this.method,
+            signal: undefined,
+            headers: { Accept: 'application/json' }
+        };
+        if (this.method === 'POST') {
+            init.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+            init.body = qs;
+        } else {
+            url += '?' + qs;
+        }
         var ctrl = new AbortController();
         var timer = setTimeout(function () { ctrl.abort(); }, o.timeoutMs);
         if (o.signal) {
             if (o.signal.aborted) ctrl.abort();
             else o.signal.addEventListener('abort', function () { ctrl.abort(); }, { once: true });
         }
-        var self = this;
-        return this.fetchImpl(url, {
-            method: 'GET',
-            signal: ctrl.signal,
-            headers: { Accept: 'application/json' }
-        }).then(function (res) {
+        init.signal = ctrl.signal;
+        return this.fetchImpl(url, init).then(function (res) {
             if (!res.ok) throw InvokerError('http status ' + res.status, res.status, res.status >= 500);
             return res.json();
         }).then(function (body) {
@@ -134,7 +158,6 @@
             throw InvokerError('network error: ' + (err && err.message), -1, retryable);
         }).finally(function () {
             clearTimeout(timer);
-            void self;
         });
     };
 
