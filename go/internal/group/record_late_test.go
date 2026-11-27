@@ -40,7 +40,7 @@ func TestLateResponseCountedOnceAfterTimeout(t *testing.T) {
 	c.pending[3] = rec
 	c.mu.Unlock()
 
-	rec.onTimeout() // 直接触发超时路径，避免用例等待 15s
+	rec.expire() // 直接触发超时路径，避免用例等待默认超时
 
 	late := &protocol.Packet{Type: protocol.STypeInvokeResponse, Seq: 3,
 		Headers: protocol.NewHeaders(), Data: []byte(`{"late":1}`)}
@@ -154,7 +154,7 @@ func TestSysErrParamsDigest(t *testing.T) {
 	rec := NewRecord(params, newFakeSink(), -1, time.Hour)
 	rec.Meter = mtr
 	rec.attached(c, 5)
-	rec.onTimeout()
+	rec.expire()
 
 	e := mtr.Errors()
 	if len(e.Recent) != 1 {
@@ -191,7 +191,7 @@ func TestSysErrParamsOffByDefault(t *testing.T) {
 	rec := NewRecord(params, newFakeSink(), -1, time.Hour)
 	rec.Meter = mtr
 	rec.attached(c, 6)
-	rec.onTimeout()
+	rec.expire()
 
 	e := mtr.Errors()
 	if len(e.Recent) != 1 || e.Recent[0].Params != "" {

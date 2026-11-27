@@ -70,6 +70,9 @@ const (
 	WSServerHelloKey = "__sekiro_hello__"
 	// WSHeartbeatKey 应用层心跳帧（无 __sekiro_seq__）的判别键，服务端原样回显。
 	WSHeartbeatKey = "__sekiro_hb__"
+	// WSProgressKey 长任务进度帧：provider 在慢请求处理期间定期发送
+	// {"__sekiro_progress__":<seq>}，服务端只刷新该调用的超时，不转发给调用方。
+	WSProgressKey = "__sekiro_progress__"
 	// WSHeartbeatHintSeconds 能力通告里建议的心跳间隔（秒）。
 	// 取值依据：服务端判死是「写空闲 20s + 等 pong 10s」= 30s，客户端按
 	// 3 个周期判活，10s × 3 = 30s 与之对齐——避免出现「服务端已把设备移出

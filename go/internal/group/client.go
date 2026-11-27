@@ -170,6 +170,18 @@ func (c *Client) Pending(seq int32) bool {
 	return ok
 }
 
+// TouchPending 处理 provider 进度帧：只刷新该调用的超时，不摘 pending、
+// 不向调用方写任何字节。序号已终结（超时/断连）时返回 false，调用方按迟到丢弃。
+func (c *Client) TouchPending(seq int32) bool {
+	c.mu.Lock()
+	rec := c.pending[seq]
+	c.mu.Unlock()
+	if rec == nil {
+		return false
+	}
+	return rec.touch()
+}
+
 // trackLateTimeout 登记一个「已按超时终结、provider 可能仍会回包」的序号。
 //
 // 由 Record.onTimeout 调用：此刻 record 已从 pending 摘除，只能靠这张小表

@@ -402,6 +402,14 @@ func wsHandleMessage(cl *group.Client, tr *wsTransport, data []byte, log *slog.L
 		return false
 	}
 	seq := msg.GetInt(protocol.WSSeqNumber)
+	// 长任务进度帧：{"__sekiro_progress__":1,"__sekiro_seq__":<seq>}
+	// 只刷新服务端等待窗口，不转发给调用方，也不产生业务响应。
+	if msg.Has(protocol.WSProgressKey) {
+		if seq > 0 && !cl.TouchPending(int32(seq)) {
+			log.Debug("progress frame for finished invoke", "seq", seq)
+		}
+		return true
+	}
 	if seq <= 0 {
 		// 应用层心跳：仅对注册时声明 hb=1 的连接放行（回执后保持连接）。
 		// 未声明的连接仍按原逻辑 4400 关闭，与旧版/Java 行为一致。

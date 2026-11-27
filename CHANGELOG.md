@@ -22,6 +22,10 @@
 
 ### 新增
 
+- **长任务进度帧（慢页面专用）**：provider 可用 `registerLongAction` 每 10s
+  发送 `{"__sekiro_progress__":seq,"__sekiro_seq__":seq}`，服务端只刷新该调用的
+  超时、不向调用方转发；resolve/reject 后自动停止。配合 Web Worker 让出主线程，
+  100s 级请求不再被 30s 默认超时切断，也不影响应用层心跳。
 - **监控页显示构建版本**：`/op` 页头展示 `version`，由构建时 `-X` 注入
   （Release 取 tag 号，本地构建默认 `dev`）；镜像与二进制来源一眼可辨。
 

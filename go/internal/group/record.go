@@ -34,6 +34,7 @@ type Record struct {
 
 	segment     bool // 已进入分段流模式
 	extendedTil time.Time
+	readyAt     time.Time // 最近一次活动后的绝对超时时刻（进度帧/分段帧刷新）
 	timer       *time.Timer
 
 	// Meter 可选指标记录器（nil 安全，测试默认不设）：
@@ -134,7 +135,28 @@ func (r *Record) attached(c *Client, seq int32) {
 	}
 	r.client = c
 	r.seq = seq
+	r.readyAt = time.Now().Add(r.timeout)
 	r.timer = time.AfterFunc(r.timeout, r.onTimeout)
+}
+
+// touch 由 provider 进度帧调用：把本次调用的超时起点滚动到当前时刻。
+// 不向调用方转发任何数据，只延长等待窗口——慢页面（单次调用 >100s）
+// 靠它避免被固定 15s/30s 超时切断。
+func (r *Record) touch() bool {
+	r.mu.Lock()
+	if r.done {
+		r.mu.Unlock()
+		return false
+	}
+	r.readyAt = time.Now().Add(r.timeout)
+	if r.segment && r.extendedTil.Before(r.readyAt) {
+		r.extendedTil = r.readyAt
+	}
+	if r.timer != nil {
+		r.timer.Reset(time.Until(r.readyAt))
+	}
+	r.mu.Unlock()
+	return true
 }
 
 func (r *Record) isDone() bool {
@@ -208,16 +230,33 @@ func (r *Record) Abort() bool {
 	return true
 }
 
-// onTimeout 对齐 scheduleTimeout（含分段流的滚动续期）。
+// onTimeout 对齐 scheduleTimeout（含进度帧/分段流的滚动续期）。
 func (r *Record) onTimeout() {
 	r.mu.Lock()
 	if r.done {
 		r.mu.Unlock()
 		return
 	}
-	if r.segment && time.Now().Before(r.extendedTil) {
-		// 只等到最后活跃时刻 + timeout，不能固定再加一个完整 timeout
-		r.timer.Reset(time.Until(r.extendedTil))
+	deadline := r.readyAt
+	if r.segment && r.extendedTil.After(deadline) {
+		deadline = r.extendedTil
+	}
+	if time.Now().Before(deadline) {
+		// 只等到最后活跃时刻 + timeout，不能固定再加一个完整 timeout。
+		// 进度帧与 onTimeout 回调可能同时到达，这里按绝对时刻二次判定，
+		// 避免刚 touch 过就被已经排队的回调误杀。
+		r.timer.Reset(time.Until(deadline))
+		r.mu.Unlock()
+		return
+	}
+	r.mu.Unlock()
+	r.expire()
+}
+
+// expire 真正终结为超时；单测可直接调用以跳过定时器等待。
+func (r *Record) expire() {
+	r.mu.Lock()
+	if r.done {
 		r.mu.Unlock()
 		return
 	}
@@ -274,7 +313,8 @@ func (r *Record) deliver(p *protocol.Packet) {
 	isSegment := strings.EqualFold("true", p.GetHeader(protocol.SegmentStreamFlag))
 	if isSegment {
 		r.segment = true
-		r.extendedTil = time.Now().Add(r.timeout)
+		r.readyAt = time.Now().Add(r.timeout)
+		r.extendedTil = r.readyAt
 	}
 	if p.Type == protocol.CTypeInvokeResponse {
 		// sekiro v2 协议兼容：C→S 类型降级

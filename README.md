@@ -138,7 +138,8 @@ GC 软目标）和 `GOGC=100`（默认值）。`GOMEMLIMIT` 不是硬限制，�
 ### 客户端接入
 
 - **Java / Python 客户端**：直接使用 [官方 sekiro-samples](https://github.com/yint-tech/sekiro-samples) SDK，服务端地址指向本项目即可
-- **JS 客户端**：`client/sekiroWeb-enhanced.js`（增强版：指数退避自动重连、心跳容错），用法见 [client/USAGE.md](client/USAGE.md)
+- **JS 客户端**：`client/sekiroWeb-enhanced.js`（增强版：指数退避自动重连、心跳容错、
+  慢请求进度帧 `registerLongAction`），用法见 [client/USAGE.md](client/USAGE.md)
 
 ## 监控报表
 

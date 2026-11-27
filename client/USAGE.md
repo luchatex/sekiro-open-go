@@ -123,6 +123,26 @@ var client = new SekiroClient('wss://sekiro.example.com', {
   - `reject(errorMessage)`：失败响应（调用方收到 `status=-1, message=errorMessage`）
 - handler 内抛出的异常自动转为失败响应，不会导致进程/页面崩溃
 
+### `client.registerLongAction(action, handler, options)`（慢请求专用）
+
+适用于单次处理确实要几十秒甚至上百秒的 action。它会自动每 `progressInterval`
+毫秒发一帧 `{"__sekiro_progress__":seq,"__sekiro_seq__":seq}`，服务端**只刷新该调用
+的超时、不向调用方转发任何数据**；resolve/reject 时自动停止。
+
+```js
+client.registerLongAction('searchCprq', async function (req) {
+  return await searchInWorker(req); // 长任务放 Web Worker
+}, { progressInterval: 10000 });
+```
+
+- `options.progressInterval`：默认 10000ms（10s），应小于服务端 invoke 超时的一半
+- handler 可用回调风格或返回 Promise；两者都只结算一次
+- **务必让主线程可让出**：长任务若同步阻塞主线程，原来的应用层心跳（10s × 3）
+  和进度帧都会停摆，页面仍会被当成假离线。用 Web Worker 或分段 `await`。
+
+调用方仍需注意：服务端每 10s 收到进度帧会滚动续期，但调用方自己的 HTTP 超时
+必须覆盖任务总时长（例如 120s），否则会在中途主动断开。
+
 ### `client.isConnected()`
 
 连接是否可用（`readyState === OPEN`）。发送类操作在未连接时**不会静默丢弃**——

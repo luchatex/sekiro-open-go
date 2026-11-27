@@ -490,3 +490,49 @@ SekiroClient.prototype.registerAction = function (action, handler) {
     this.handlers[action] = handler;
     logToConsole('sekiro: register action: ' + action);
 };
+
+// sendProgress 发送长任务进度帧：服务端只刷新该 seq 的超时，不转发给调用方。
+// 慢页面（单次调用 >30s）用它避免被服务端固定超时切断；业务成功后不用再发。
+SekiroClient.prototype.sendProgress = function (seq) {
+    if (!seq || !this.isConnected()) return false;
+    this.socket.send(JSON.stringify({
+        '__sekiro_progress__': seq,
+        '__sekiro_seq__': seq
+    }));
+    return true;
+};
+
+// registerLongAction 包装 registerAction，自动按 interval 发进度帧并在
+// resolve/reject 时停止。handler 可用回调风格或返回 Promise；两者都只结算一次。
+// 注意：长任务本身应放在 Web Worker 或异步可让出主线程的流程里，
+// 否则定时器（心跳 + 进度帧）会被主线程阻塞，页面仍会被判假离线。
+SekiroClient.prototype.registerLongAction = function (action, handler, options) {
+    var _this = this;
+    var opts = options || {};
+    var interval = opts.progressInterval || 10000;
+    this.registerAction(action, function (request, resolve, reject) {
+        var seq = request['__sekiro_seq__'];
+        if (!seq) {
+            reject('missing __sekiro_seq__');
+            return;
+        }
+        var settled = false;
+        var timer = setInterval(function () { _this.sendProgress(seq); }, interval);
+        function finish(cb) {
+            return function (value) {
+                if (settled) return;
+                settled = true;
+                clearInterval(timer);
+                try { cb(value); } catch (e) { logToConsole('error: ' + e); }
+            };
+        }
+        var done = finish(resolve);
+        var failed = finish(reject);
+        try {
+            var ret = handler(request, done, failed);
+            if (ret && typeof ret.then === 'function') ret.then(done, failed);
+        } catch (e) {
+            failed(e);
+        }
+    });
+};

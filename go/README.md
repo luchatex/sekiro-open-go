@@ -214,6 +214,12 @@ WS 心跳:  /register?group=&clientId=&hb=1（服务端回 {"__sekiro_hello__":1
 老客户端不声明 `hb=1`，收不到通告，行为与旧版完全一致；老服务端则忽略该参数、
 不下发通告，新客户端自动降级。
 
+**慢页面（单次调用 >30s）**：增强版客户端提供 `registerLongAction`，每 10s 发一帧
+`{"__sekiro_progress__":seq,"__sekiro_seq__":seq}`；服务端只刷新该调用超时，不向
+调用方转发，resolve/reject 后自动停止。长任务需放在 Web Worker 或可让出主线程
+的异步流程里，否则心跳与进度帧都会被主线程阻塞，页面仍会被判假离线。调用方自身
+HTTP 超时仍需覆盖任务总时长（例如 120s）。
+
 ## 验证体系
 
 - **黄金向量对拍**：用原 Java 私有 jar 产出基准（`testdata/golden/`）——帧编解码 12 例、
