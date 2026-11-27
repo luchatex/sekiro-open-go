@@ -49,7 +49,7 @@ type Record struct {
 
 func NewRecord(params *orderedjson.Map, sink Sink, invokerSeq int32, timeout time.Duration) *Record {
 	if timeout < 500*time.Millisecond {
-		timeout = protocol.DefaultInvokeTimeout // 对齐：小于 500ms 按默认 15s
+		timeout = protocol.DefaultInvokeTimeout // 对齐：小于 500ms 按默认 30s
 	}
 	return &Record{
 		Params:     params,
@@ -104,13 +104,14 @@ func (r *Record) finishSysErr(reason, message string) {
 // digestSkipKeys 框架键：属协议层（分组/动作/超时/序号），对定位业务请求
 // 无价值且稳定占预算，摘要里剔除。
 var digestSkipKeys = map[string]bool{
-	protocol.ParamGroup:          true,
-	protocol.ParamAction:         true,
-	protocol.ParamBindClient:     true,
-	protocol.ParamConstantInvoke: true,
-	protocol.ParamInvokeTimeout:  true,
-	protocol.WSSeqNumber:         true,
-	protocol.ParamApiToken:       true,
+	protocol.ParamGroup:              true,
+	protocol.ParamAction:             true,
+	protocol.ParamBindClient:         true,
+	protocol.ParamConstantInvoke:     true,
+	protocol.ParamInvokeTimeout:      true,
+	protocol.ParamInvokeTimeoutAlias: true,
+	protocol.WSSeqNumber:             true,
+	protocol.ParamApiToken:           true,
 }
 
 // digestMaxBytes 参数摘要长度上限：够放 URL + 业务 ID，又不至于把大 body
@@ -182,7 +183,7 @@ func (r *Record) fail(message, clientID string) {
 //  3. 从 client.pending 摘除，否则 pending 会一直挂到超时才被清理
 //
 // 由HTTP handler 在 r.Context().Done() 时调用：客户端断连后不再
-// 驻留到15s 超时。
+// 驻留到默认超时。
 // 返回 true 表示本次 Abort 赢得终结；false 表示已有响应/超时先完成，
 // HTTP handler 应等待该写回结束再关闭压缩流。
 func (r *Record) Abort() bool {

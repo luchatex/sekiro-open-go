@@ -130,7 +130,7 @@ func TestWSHeartbeatDoesNotBreakInvoke(t *testing.T) {
 	}
 
 	// 服务端下发 invoke：读一帧应能拿到带 seq 的请求；回一个合法响应，
-	// 让 HTTP 调用方立刻返回（否则要等 15s 超时，测试会莫名变慢）
+	// 让 HTTP 调用方立刻返回（否则要等默认超时，测试会莫名变慢）
 	type frame struct {
 		req string
 		err error

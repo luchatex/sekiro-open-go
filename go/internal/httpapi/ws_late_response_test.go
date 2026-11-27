@@ -76,7 +76,7 @@ func TestLateWSResponseCountedAfterTimeout(t *testing.T) {
 		t.Fatal("provider 未注册进 group")
 	}
 
-	// invoke_timeout 取 600ms（<500ms 会被按默认 15s 处理，用例无法接受）
+	// invoke_timeout 取 600ms（<500ms 会被按默认 30s 处理，用例无法接受）
 	res, err := http.Get(srv.URL + "/business/invoke?group=late-e2e&action=getDetailData&invoke_timeout=600")
 	if err != nil {
 		t.Fatalf("invoke: %v", err)

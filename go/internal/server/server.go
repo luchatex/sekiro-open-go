@@ -79,7 +79,7 @@ func New(cfg *config.Config) (*Server, error) {
 		ReadHeaderTimeout: 30 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 		// 仅设空闲超时：把"连上不请求"的 keep-alive 连接收回来。
-		// 刻意不设 WriteTimeout——invoke 是长轮询（默认 15s，可配置更长）
+		// 刻意不设 WriteTimeout——invoke 是长轮询（默认 30s，可配置更长）
 		// 且分段流按需续期，写超时会切断正常的大响应与流式输出。
 		IdleTimeout: 120 * time.Second,
 	}
@@ -136,7 +136,7 @@ func (s *Server) tlsListener() net.Listener {
 	return s.tlsLn
 }
 
-// shutdownGrace 优雅关停等待窗口：需覆盖默认 15s invoke 超时，
+// shutdownGrace 优雅关停等待窗口：需覆盖默认 30s invoke 超时，
 // 让在途的长轮询调用有机会正常回包。
 const shutdownGrace = 20 * time.Second
 
@@ -226,7 +226,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 }
 
-// Shutdown 优雅关停：停止接入新连接，等待在途 HTTP 请求结束（含 15s
+// Shutdown 优雅关停：停止接入新连接，等待在途 HTTP 请求结束（含 30s
 // invoke 长轮询），超时后由 http.Server 强关剩余连接。
 func (s *Server) Shutdown() error {
 	if ln := s.listener(); ln != nil {

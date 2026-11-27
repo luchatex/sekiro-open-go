@@ -171,7 +171,7 @@ func handleInvoke(w http.ResponseWriter, r *http.Request, mgr *group.Manager, lo
 	if cw, ok := w.(*compressWriter); ok {
 		sink.cw = cw // 实际出站字节（压缩后）统计来源
 	}
-	timeout := timeFromMillis(params.GetInt(protocol.ParamInvokeTimeout))
+	timeout := timeFromMillis(protocol.InvokeTimeoutMillis(params))
 	rec := group.NewRecord(params, sink, -1, timeout)
 	rec.Meter = mtr
 	// 来源 IP 始终进入系统错误事件：定位「谁在反复发这条请求」不需要业务参数，
@@ -202,7 +202,7 @@ func handleInvoke(w http.ResponseWriter, r *http.Request, mgr *group.Manager, lo
 	// 以及「消费方主动断开」——后者的信号是 r.Context().Done()。
 	//
 	// 不监听它的话，客户端断连后本goroutine 会驻留到 Record 超时
-	// （默认 15s），pending 也同步挂到超时。调用方超时设得较长
+	// （默认 30s），pending 也同步挂到超时。调用方超时设得较长
 	// （30s/60s）或批量超时时，堆积量可观。
 	select {
 	case <-sink.Closed():
@@ -251,7 +251,7 @@ func truncate(s string, limit int) string {
 // bodyReadTimeout 读取请求 body 的上限。
 //
 // 为何需要：http.Server 只设了 ReadHeaderTimeout（仅覆盖请求首部），
-// ReadTimeout 未设——若全局设置会误杀 15s 长轮询的响应期。body 读取发生在
+// ReadTimeout 未设——若全局设置会误杀 长轮询的响应期。body 读取发生在
 // NewRecord 之前，客户端的 invoke_timeout 参数此刻尚未解析，对它无约束。
 // 于是「发完首部就静默」的连接会永久阻塞在 io.ReadAll，占住 1 个 goroutine
 // 与 1 个 fd直到客户端断开或服务重启，且日志无任何痕迹（故障放大器）。
@@ -343,10 +343,10 @@ func buildParams(w http.ResponseWriter, r *http.Request, mimeType string) (*orde
 	return m, bodyLen, nil
 }
 
-// timeFromMillis 解析 invoke_timeout（毫秒）；小于 500ms 按默认 15s。
+// timeFromMillis 解析 invoke_timeout（毫秒）；小于 500ms 按默认 30s。
 func timeFromMillis(ms int) time.Duration {
 	if ms < 500 {
-		return 0 // Record 内提升为默认 15s
+		return 0 // Record 内提升为默认 30s
 	}
 	return time.Duration(ms) * time.Millisecond
 }

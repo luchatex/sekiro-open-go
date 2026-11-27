@@ -87,7 +87,7 @@ func (c *Client) IsDown() bool { return c.offline.Load() || !c.tr.Active() }
 // 顺序约束（两段都不能交换，provider 响应可达毫秒级）：
 //  1. 先登记 pending 再 SendInvoke：若先发送后登记，高并发下本 goroutine
 //     被调度延迟时响应会先于登记到达 HandleResponse，pending 查空导致
-//     响应被丢弃、请求空等 15s 超时（压测实证：20000 请求约 11 例，0.05%）。
+//     响应被丢弃、请求空等 默认超时（压测实证：20000 请求约 11 例，0.05%）。
 //  2. attached 也必须在 SendInvoke 之前：pending 登记后响应即可到达
 //     deliver，若此时尚未 attached，r.client 为 nil → 响应头
 //     SEKIRO_CLIENT_ID 为空（-cover 下 e2e 偶发 "clientId header

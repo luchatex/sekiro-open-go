@@ -44,16 +44,19 @@ const (
 
 // 保留参数字，与 Constants$REVERSED_WORDS 对齐。
 const (
-	ParamGroup           = "group"
-	ParamAction          = "action"
-	ParamApiToken        = "sekiro_token"
-	ParamBindClient      = "bind_client"
-	ParamInvokeTimeout   = "invoke_timeout"
-	ParamConstantInvoke  = "__sekiro_constant_key"
-	ParamInvokeTraceID   = "__invoke_trace_id"
-	ParamActionList      = "__action_list"
-	ParamSystemTimeout   = "__sekiro_system_timeout"
-	ParamResponse5xxJSON = "__response_5xx_as_json"
+	ParamGroup         = "group"
+	ParamAction        = "action"
+	ParamApiToken      = "sekiro_token"
+	ParamBindClient    = "bind_client"
+	ParamInvokeTimeout = "invoke_timeout"
+	// ParamInvokeTimeoutAlias 兼容调用方历史拼写 `invoke_timeOut`（大写 O）。
+	// 只作为回落：同时出现时以正确的 invoke_timeout 为准。
+	ParamInvokeTimeoutAlias = "invoke_timeOut"
+	ParamConstantInvoke     = "__sekiro_constant_key"
+	ParamInvokeTraceID      = "__invoke_trace_id"
+	ParamActionList         = "__action_list"
+	ParamSystemTimeout      = "__sekiro_system_timeout"
+	ParamResponse5xxJSON    = "__response_5xx_as_json"
 	// WSSeqNumber WebSocket 通道的关联序号字段。
 	WSSeqNumber = "__sekiro_seq__"
 	// WSHeartbeatParam 注册时声明「支持应用层心跳」的 query 参数。
@@ -114,7 +117,7 @@ func ServerReadIdle() time.Duration    { return time.Duration(serverReadIdle.Loa
 func ServerPongTimeout() time.Duration { return time.Duration(serverPongWait.Load()) }
 
 const (
-	DefaultInvokeTimeout = 15 * time.Second
+	DefaultInvokeTimeout = 30 * time.Second
 )
 
 // DefaultMaxFrameBytes 单帧/请求体默认上限 16MB。

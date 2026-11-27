@@ -37,7 +37,7 @@ type Channel struct {
 	lastWrite atomic.Int64
 	writeMu   sync.Mutex // 并发写保护：多个 HTTP handler 同时向同一
 	// provider 下发 S_TYPE_INVOKE，与心跳线程并发——TCP 流式帧必须串行化，
-	// 否则帧交错损坏（压测实证：偶发响应丢失 → 15s 超时）
+	// 否则帧交错损坏（压测实证：偶发响应丢失 → 默认超时）
 	closeOnce sync.Once
 	stopHB    chan struct{}
 
@@ -110,7 +110,7 @@ func (c *Channel) finishInvoke(seq int32) {
 }
 
 // abortPendingInvokes invoker 断开时立即取消所有未完成调用，释放 provider
-// pending、定时器和请求参数，而不是等各自的 15s 超时。
+// pending、定时器和请求参数，而不是等各自的 默认超时。
 func (c *Channel) abortPendingInvokes() {
 	c.invMu.Lock()
 	recs := c.invPending
@@ -272,7 +272,7 @@ func (c *Channel) handleInvokerInvoke(p *protocol.Packet) {
 	}
 	params.Set(protocol.DoNotCompress, "true")
 	sink := &invokerSink{ch: c, seq: p.Seq, closed: make(chan struct{})}
-	timeout := time.Duration(params.GetInt(protocol.ParamInvokeTimeout)) * time.Millisecond
+	timeout := time.Duration(protocol.InvokeTimeoutMillis(params)) * time.Millisecond
 	rec := group.NewRecord(params, sink, p.Seq, timeout) // <500ms 由 NewRecord 提升为默认值
 	rec.SourceIP = peerHost(c.conn.RemoteAddr().String())
 	if !c.trackInvoke(p.Seq, rec) {

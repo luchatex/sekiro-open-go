@@ -11,6 +11,11 @@
 
 ### 修复
 
+- **兼容 `invoke_timeOut` 拼写，默认 invoke 超时 15s → 30s**：部分业务脚本把
+  `invoke_timeout` 写成 `invoke_timeOut`（大写 O），此前被静默忽略并回退到
+  15s，导致 100s 意图失效、超时与迟到响应频发。现在两个拼写都识别，正确拼写
+  优先；参数摘要同时剔除两个键。默认超时放宽到 30s，调用方自身 HTTP 超时建议
+  45s 以上。
 - **compose 支持 `SEKIRO_OP_ERR_PARAMS`**：参数摘要开关此前只能由 flag 或
   `docker run -e` 设置，`.env` 里写了也不会被 compose 转发进容器；现已补上
   环境变量透传与示例说明。

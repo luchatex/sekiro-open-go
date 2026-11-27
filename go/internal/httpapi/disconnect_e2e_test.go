@@ -3,7 +3,7 @@ package httpapi
 // 客户端断连后及时回收 invoke handler 的端到端验证。
 //
 // 修复前：handleInvoke 阻塞在 <-sink.Closed()，客户端断开后 goroutine
-// 仍驻留到 Record 超时（默认 15s），pending 也同步挂到超时。
+// 仍驻留到 Record 超时（默认 30s），pending 也同步挂到超时。
 // 修复后：监听 r.Context().Done()，断连即 Abort——清 pending、停定时器、
 // 不写回响应（连接已关，写了只会往死 socket 写）。
 
@@ -70,7 +70,7 @@ func postThenDisconnect(t *testing.T, addr, groupName string) {
 }
 
 // TestInvokeHandlerReleasedOnClientDisconnect 核心端到端回归：
-// 100 个断连请求的 handler 必须快速退出，不得驻留到 15s 超时。
+// 100 个断连请求的 handler 必须快速退出，不得驻留到 默认超时。
 func TestInvokeHandlerReleasedOnClientDisconnect(t *testing.T) {
 	const n = 100
 

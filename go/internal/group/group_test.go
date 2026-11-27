@@ -331,9 +331,14 @@ func TestInvokeFlowTimeout(t *testing.T) {
 
 	sink := newFakeSink()
 	params, _ := orderedjson.Parse([]byte(`{"group":"flow","action":"a"}`))
-	rec := NewRecord(params, sink, -1, 300*time.Millisecond) // <500ms → 提升到默认 15s
-	rec2 := NewRecord(params, sink, -1, 0)
-	_ = rec2
+	// <500ms 提升到默认值由字段断言覆盖，端到端等待改用 600ms，避免单测白等 30s。
+	if got := NewRecord(params, sink, -1, 300*time.Millisecond).timeout; got != protocol.DefaultInvokeTimeout {
+		t.Fatalf("300ms 应提升到默认超时，实际 %v", got)
+	}
+	if got := NewRecord(params, sink, -1, 0).timeout; got != protocol.DefaultInvokeTimeout {
+		t.Fatalf("0ms 应提升到默认超时，实际 %v", got)
+	}
+	rec := NewRecord(params, sink, -1, 600*time.Millisecond)
 	rec.attached(c, 7)
 
 	select {
@@ -344,8 +349,8 @@ func TestInvokeFlowTimeout(t *testing.T) {
 		if cc.message != "timeout" || cc.status != -1 || cc.seq != 7 {
 			t.Fatalf("timeout response: %+v", cc)
 		}
-	case <-time.After(20 * time.Second):
-		t.Fatal("timeout record did not fire (should use default 15s)")
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout record did not fire")
 	}
 }
 
