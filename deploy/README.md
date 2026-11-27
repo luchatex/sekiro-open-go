@@ -143,7 +143,7 @@ docker run -d --name sekiro \
   --log-driver=json-file --log-opt max-size=50m --log-opt max-file=3 \
   -e GOMEMLIMIT=3GiB -e GOGC=100 -e SEKIRO_MAX_FRAME_MB=16 \
   -p 5612:5612 --restart unless-stopped \
-  ghcr.io/luchatex/sekiro-open-go:1.1.1
+  ghcr.io/luchatex/sekiro-open-go:1.1.2
 ```
 
 注意事项：

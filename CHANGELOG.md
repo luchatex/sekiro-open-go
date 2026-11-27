@@ -7,7 +7,11 @@
 产物与镜像随 `v*` 标签自动构建发布，各版本下载见
 [Releases](https://github.com/luchatex/sekiro-open-go/releases)。
 
-## [Unreleased]
+## [v1.1.2] - 2026-11-27
+
+发布镜像：`ghcr.io/luchatex/sekiro-open-go:1.1.2`（同时生成 `1.1`）。
+以「定位失败调用方」为主的补丁版本：系统错误事件新增来源 IP，监控页最近事件
+表格同步展示，不再依赖 nginx access log 是否记录 invoke 参数。
 
 ### 新增
 
@@ -216,6 +220,7 @@ gzip 状态对象池化、单帧上限收紧到默认 16MB；监控页最近事�
 
 单静态二进制、无 JVM 依赖。
 
+[v1.1.2]: https://github.com/luchatex/sekiro-open-go/compare/v1.1.1...v1.1.2
 [v1.1.1]: https://github.com/luchatex/sekiro-open-go/compare/v1.1.0...v1.1.1
 [v1.1.0]: https://github.com/luchatex/sekiro-open-go/compare/v1.0.4...v1.1.0
 [v1.0.4]: https://github.com/luchatex/sekiro-open-go/compare/v1.0.3...v1.0.4
