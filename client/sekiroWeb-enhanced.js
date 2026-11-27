@@ -510,18 +510,29 @@ SekiroClient.prototype.registerLongAction = function (action, handler, options) 
     var _this = this;
     var opts = options || {};
     var interval = opts.progressInterval || 10000;
+    var singleFlight = opts.singleFlight !== false;
+    var busyMessage = opts.busyMessage || 'busy, retry with backoff';
+    var inFlight = 0;
     this.registerAction(action, function (request, resolve, reject) {
         var seq = request['__sekiro_seq__'];
         if (!seq) {
             reject('missing __sekiro_seq__');
             return;
         }
+        // 忙信号：同一 action 已有在途任务时立即失败，不排队堆积。
+        // 调用方收到 busy 后走退避重试即可，页面压力不会被放大。
+        if (singleFlight && inFlight > 0) {
+            reject(busyMessage);
+            return;
+        }
+        inFlight++;
         var settled = false;
         var timer = setInterval(function () { _this.sendProgress(seq); }, interval);
         function finish(cb) {
             return function (value) {
                 if (settled) return;
                 settled = true;
+                inFlight--;
                 clearInterval(timer);
                 try { cb(value); } catch (e) { logToConsole('error: ' + e); }
             };

@@ -9,6 +9,21 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **`registerLongAction` 内置忙信号**：同一 action 已有在途任务时立即
+  `reject('busy, retry with backoff')`，不再排队堆积；可用 `singleFlight:false`
+  关闭，或用 `busyMessage` 自定义文案。
+- **调用方参考封装 `client/sekiroInvoker.js`**：内置正确的 `invoke_timeout`、
+  调用方 HTTP 超时、每 clientId 并发 1、最多 2 次退避重试、幂等缓存与熔断；
+  附 `client/test-sekiroInvoker.js` 本地自测。
+
+## [v1.1.3] - 2026-11-27
+
+发布镜像：`ghcr.io/luchatex/sekiro-open-go:1.1.3`（同时生成 `1.1`）。
+以「慢请求安全跑完」为主的补丁版本：服务端支持进度帧续期，客户端提供
+`registerLongAction`，同时兼容调用方历史超时拼写并放宽默认值。
+
 ### 修复
 
 - **兼容 `invoke_timeOut` 拼写，默认 invoke 超时 15s → 30s**：部分业务脚本把
@@ -19,6 +34,7 @@
 - **compose 支持 `SEKIRO_OP_ERR_PARAMS`**：参数摘要开关此前只能由 flag 或
   `docker run -e` 设置，`.env` 里写了也不会被 compose 转发进容器；现已补上
   环境变量透传与示例说明。
+- **错误事件详情展示 group/action**：展开最近事件时可直接看到分组与动作。
 
 ### 新增
 
@@ -28,6 +44,7 @@
   100s 级请求不再被 30s 默认超时切断，也不影响应用层心跳。
 - **监控页显示构建版本**：`/op` 页头展示 `version`，由构建时 `-X` 注入
   （Release 取 tag 号，本地构建默认 `dev`）；镜像与二进制来源一眼可辨。
+- **JS 客户端支持 Node `require`**：本地联调可直接引入 `SekiroClient`。
 
 ## [v1.1.2] - 2026-11-27
 
@@ -242,6 +259,7 @@ gzip 状态对象池化、单帧上限收紧到默认 16MB；监控页最近事�
 
 单静态二进制、无 JVM 依赖。
 
+[v1.1.3]: https://github.com/luchatex/sekiro-open-go/compare/v1.1.2...v1.1.3
 [v1.1.2]: https://github.com/luchatex/sekiro-open-go/compare/v1.1.1...v1.1.2
 [v1.1.1]: https://github.com/luchatex/sekiro-open-go/compare/v1.1.0...v1.1.1
 [v1.1.0]: https://github.com/luchatex/sekiro-open-go/compare/v1.0.4...v1.1.0

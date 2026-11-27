@@ -136,6 +136,9 @@ client.registerLongAction('searchCprq', async function (req) {
 ```
 
 - `options.progressInterval`：默认 10000ms（10s），应小于服务端 invoke 超时的一半
+- `options.singleFlight`：默认 `true`，同一 action 已有在途任务时立即
+  `reject('busy, retry with backoff')`，不排队堆积；设 `false` 可关闭
+- `options.busyMessage`：自定义忙信号文案
 - handler 可用回调风格或返回 Promise；两者都只结算一次
 - **务必让主线程可让出**：长任务若同步阻塞主线程，原来的应用层心跳（10s × 3）
   和进度帧都会停摆，页面仍会被当成假离线。用 Web Worker 或分段 `await`。
@@ -213,6 +216,34 @@ new SekiroClient('wss://127.0.0.1:5613', { group: 'demoGroup', clientId: 'web-1'
 
 注意：明文 `ws://127.0.0.1` 从 https 页面连接仍会被 LNA 拦截
 （`net::ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS`），必须走 wss。
+
+## 调用方参考实现（慢请求防堆积）
+
+`client/sekiroInvoker.js` 是给调用方用的参考封装，把方案里的四条约束内置了：
+正确的 `invoke_timeout`（毫秒）、调用方 HTTP 超时（默认 120s）、**每 clientId
+并发 1**、最多 2 次退避 + 抖动重试，并带幂等缓存与熔断。
+
+```js
+const SekiroInvoker = require('./sekiroInvoker.js');  // 浏览器用 <script> 引入即可
+
+const invoker = new SekiroInvoker('https://sekiro.example.com', {
+  timeoutMs: 120000,        // 调用方 HTTP 超时，须 > 任务总时长
+  serverTimeoutMs: 100000,  // 写进 invoke_timeout，服务端按此等待
+  breakerFailures: 3        // 同 clientId 5 分钟内 3 次失败 → 熔断 5 分钟
+});
+
+const res = await invoker.invoke('ws_list', 'searchCprq',
+  { startDate: '2023-07-16', endDate: '2023-11-07', pageNum: 40 },
+  { bindClient: '15696699241' });
+```
+
+- 同一 `bindClient` 的请求自动串行；不同 clientId 互不影响。
+- 重试只针对 `busy` / `timeout` / `upstream lose connection` 和网络错误；
+  业务失败（如 `no device found`）不重试。
+- 相同参数默认按幂等键缓存 5 分钟；可用 `idempotencyKey` 显式指定。
+- 熔断期间直接抛 `circuit open`，不再向慢设备发请求。
+
+本地自测：`node client/test-sekiroInvoker.js`（无需服务端，注入 fake fetch）。
 
 ## 服务端配套验证
 
