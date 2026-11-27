@@ -133,6 +133,7 @@ SEKIRO_MAX_FRAME_MB=16
 | `memswap_limit=4g` | 与 memory 相等，禁止 swap 掩盖内存问题 | 保持相等，避免换页拖慢整个服务 |
 | `GOMEMLIMIT=3GiB` | Go GC 的**软目标**，接近时更积极回收 | 取容器限制的 75%–90%，给栈、runtime、socket 缓冲留余量 |
 | `GOGC=100` | Go 默认 GC 频率 | 先保持 100；没有泄漏且 CPU 富余时才试 75，50 会增加显著 GC CPU |
+| `SEKIRO_OP_ERR_PARAMS=false` | 错误事件是否附带参数摘要（截断 256B） | 默认关；排障时设 `true` 并重启，定位完及时关掉，避免业务参数进监控 |
 | `max-size=50m` + `max-file=3` | json-file 单文件与份数上限 | 总上限约 150MB，比 `100m×3` 更保守 |
 
 如果不用 compose，必须显式传入等价参数：
@@ -142,6 +143,7 @@ docker run -d --name sekiro \
   --memory=4g --memory-swap=4g \
   --log-driver=json-file --log-opt max-size=50m --log-opt max-file=3 \
   -e GOMEMLIMIT=3GiB -e GOGC=100 -e SEKIRO_MAX_FRAME_MB=16 \
+  -e SEKIRO_OP_ERR_PARAMS=false \
   -p 5612:5612 --restart unless-stopped \
   ghcr.io/luchatex/sekiro-open-go:1.1.2
 ```

@@ -7,6 +7,19 @@
 产物与镜像随 `v*` 标签自动构建发布，各版本下载见
 [Releases](https://github.com/luchatex/sekiro-open-go/releases)。
 
+## [Unreleased]
+
+### 修复
+
+- **compose 支持 `SEKIRO_OP_ERR_PARAMS`**：参数摘要开关此前只能由 flag 或
+  `docker run -e` 设置，`.env` 里写了也不会被 compose 转发进容器；现已补上
+  环境变量透传与示例说明。
+
+### 新增
+
+- **监控页显示构建版本**：`/op` 页头展示 `version`，由构建时 `-X` 注入
+  （Release 取 tag 号，本地构建默认 `dev`）；镜像与二进制来源一眼可辨。
+
 ## [v1.1.2] - 2026-11-27
 
 发布镜像：`ghcr.io/luchatex/sekiro-open-go:1.1.2`（同时生成 `1.1`）。
@@ -15,8 +28,6 @@
 
 ### 新增
 
-- **监控页显示构建版本**：`/op` 页头展示 `version`，由构建时 `-X` 注入
-  （Release 取 tag 号，本地构建默认 `dev`）；镜像与二进制来源一眼可辨。
 - **系统错误事件带来源 IP**：`/op/api/errors` 的 `recent` 事件新增 `sourceIp`，
   始终采集并去掉端口；反代后按可信规则取 `X-Real-IP` / `X-Forwarded-For`。
   定位「谁在反复发这条请求」不再依赖 nginx access log 是否记录 invoke 参数。

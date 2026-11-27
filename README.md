@@ -120,6 +120,7 @@ curl "http://127.0.0.1:5612/business/groupList"
 | `-log-level` | `SEKIRO_LOG_LEVEL` | `info` | 日志级别；`warn` 可关逐笔调用日志 |
 | `-op-disable` | `SEKIRO_OP_DISABLE` | 关 | 关闭 `/op` 监控页及全部 `/op/api/*` |
 | `-op-password` | `SEKIRO_OP_PASSWORD` | 空 | `/op` 监控路径访问密码；连续输错 3 次锁定来源 IP 2 分钟。空 = 无鉴权 |
+| `-op-err-params` | `SEKIRO_OP_ERR_PARAMS` | 关 | 系统错误事件附带参数摘要（跳过框架键、截断 256B）；排障用，默认关避免业务参数入监控。来源 IP 不受此开关影响 |
 | `-tls-cert/-tls-key` | `SEKIRO_TLS_CERT/KEY` | 空 | 同时提供则启用 wss 监听 |
 | `-tls-port` | `SEKIRO_TLS_PORT` | `5613` | wss 监听端口 |
 | `-max-frame-mb` | `SEKIRO_MAX_FRAME_MB` | `16` | 单帧 / HTTP body / WS 帧上限（MiB）；大文本场景按需调大，最大 1024 |
