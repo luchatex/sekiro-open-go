@@ -536,3 +536,8 @@ SekiroClient.prototype.registerLongAction = function (action, handler, options) 
         }
     });
 };
+
+// Node.js 本地调试用：浏览器里 module 未定义，不影响全局 SekiroClient。
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = SekiroClient;
+}
