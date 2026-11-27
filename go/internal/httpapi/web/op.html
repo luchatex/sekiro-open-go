@@ -748,7 +748,7 @@ function renderErrors(d) {
       eh += `<tr class="detail"><td colspan="9"><div class="sub event-detail">
         <div><b>详情</b>${esc(e.message || "–")}</div>
         <div><b>参数</b>${esc(e.params || "–")}</div>
-        <div class="meta">来源 IP ${esc(e.sourceIp || "–")} · clientId ${esc(e.clientId || "–")} · 通道 ${esc(e.channel || "–")} · ${esc(e.time)}</div>
+        <div class="meta">group/action ${esc(e.group || "–")}/${esc(e.action || "–")} · 来源 IP ${esc(e.sourceIp || "–")} · clientId ${esc(e.clientId || "–")} · 通道 ${esc(e.channel || "–")} · ${esc(e.time)}</div>
       </div></td></tr>`;
     }
   }
