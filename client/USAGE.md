@@ -217,6 +217,21 @@ new SekiroClient('wss://127.0.0.1:5613', { group: 'demoGroup', clientId: 'web-1'
 注意：明文 `ws://127.0.0.1` 从 https 页面连接仍会被 LNA 拦截
 （`net::ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS`），必须走 wss。
 
+## 与原有 client 的兼容性
+
+新增能力全部是**可选**的，原有 provider 页面和调用方代码都可以不改：
+
+| 场景 | 是否需要改 | 说明 |
+|---|---|---|
+| 官方 `sekiroWeb.js` provider | 不改 | 服务端只是新增进度帧识别，旧注册/回包路径不变；长任务靠调用方传够 `invoke_timeout` |
+| 现有 fetch / axios 调用方 | 不改 | 历史拼写 `invoke_timeOut` 服务端已兼容，100s 意图会生效 |
+| 增强版 provider | 可选 | 换 `sekiroWeb-enhanced.js` 后可用 `registerLongAction` 自动发进度帧 + 忙信号 |
+| 调用方封装 | 可选 | `sekiroInvoker.js` 是替代手写 fetch 的参考实现，不接入也不影响旧调用 |
+
+**旧客户端长任务示例**：provider 不声明 `hb=1`、不发进度帧，调用方仍写
+`invoke_timeOut=1200`，900ms 后回包，服务端必须成功。该路径已有 E2E 覆盖
+（`TestOldWSClientLongInvokeWithAliasTimeout`）。
+
 ## 调用方参考实现（慢请求防堆积）
 
 `client/sekiroInvoker.js` 是给调用方用的参考封装，把方案里的四条约束内置了：

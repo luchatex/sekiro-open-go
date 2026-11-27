@@ -142,6 +142,8 @@ GC 软目标）和 `GOGC=100`（默认值）。`GOMEMLIMIT` 不是硬限制，�
   慢请求进度帧 `registerLongAction` + 忙信号），用法见 [client/USAGE.md](client/USAGE.md)
 - **调用方参考封装**：`client/sekiroInvoker.js`（正确超时参数、每 clientId 并发 1、
   退避重试、幂等与熔断），慢请求防堆积方案见 [client/USAGE.md](client/USAGE.md)
+- **向后兼容**：官方 `sekiroWeb.js` provider 与现有 fetch/axios 调用方均可不变；
+  历史拼写 `invoke_timeOut` 服务端已识别，进度帧与忙信号都是可选增强
 
 ## 监控报表
 

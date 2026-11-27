@@ -29,6 +29,8 @@
 - **支持 GET / POST**：默认 GET，大参数可切 `method:'POST'`（form body）。
 - **池化调用不串行**：无 `bindClient` 时不再人为压成单并发；需要时显式
   `serialize:true`。
+- **旧客户端兼容验证**：新增 E2E 覆盖官方 `sekiroWeb.js` 路径（不声明 `hb=1`、
+  不发进度帧）+ 调用方历史拼写 `invoke_timeOut`，900ms 慢回包仍成功。
 
 ## [v1.1.3] - 2026-11-27
 
